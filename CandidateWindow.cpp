@@ -507,8 +507,14 @@ LRESULT CALLBACK CCandidateWindow::_WindowProcCallback(_In_ HWND wndHandle, UINT
             PAINTSTRUCT ps;
 
             dcHandle = BeginPaint(wndHandle, &ps);
-			_DrawBorder(wndHandle, CANDWND_BORDER_WIDTH);
+
+			// 繪製客戶端區域內容（使用雙緩衝）
             _OnPaint(dcHandle, &ps);
+
+			// 繪製視窗邊框（使用獨立的視窗 DC）
+			// 注意：邊框繪製在視窗座標系統，與客戶端區域的雙緩衝分離
+			_DrawBorder(wndHandle, CANDWND_BORDER_WIDTH);
+
             EndPaint(wndHandle, &ps);
 			ReleaseDC(wndHandle, dcHandle);
 			debugPrint(L"CCandidateWindow::_WindowProcCallback():WM_PAINT ended. gdiObjects = %d", GetGuiResources(GetCurrentProcess(), GR_GDIOBJECTS));
@@ -602,13 +608,50 @@ void CCandidateWindow::_OnPaint(_In_ HDC dcHandle, _In_ PAINTSTRUCT *pPaintStruc
 
 	if(pPaintStruct == nullptr) return;
 
-    SetBkMode(dcHandle, TRANSPARENT);
+	// 實作雙緩衝以消除高刷新率螢幕的撕裂和殘影
+	// 計算繪製區域大小
+	int width = pPaintStruct->rcPaint.right - pPaintStruct->rcPaint.left;
+	int height = pPaintStruct->rcPaint.bottom - pPaintStruct->rcPaint.top;
 
-    HFONT hFontOld = (HFONT)SelectObject(dcHandle, Global::defaultlFontHandle);
-	
-	if(_brshBkColor) 
+	// 預先宣告變數以避免 goto 警告
+	HDC memDC = nullptr;
+	HBITMAP memBitmap = nullptr;
+	HBITMAP oldBitmap = nullptr;
+	HFONT hFontOld = nullptr;
+	RECT memRect = {0};
+
+	// 建立記憶體 DC 和相容位圖進行離屏繪製
+	memDC = CreateCompatibleDC(dcHandle);
+	if (!memDC)
 	{
-		FillRect(dcHandle, &pPaintStruct->rcPaint,_brshBkColor);
+		// 如果建立記憶體 DC 失敗，回退到直接繪製
+		debugPrint(L"CCandidateWindow::_OnPaint() - CreateCompatibleDC failed, fallback to direct paint\n");
+		goto fallback_direct_paint;
+	}
+
+	memBitmap = CreateCompatibleBitmap(dcHandle, width, height);
+	if (!memBitmap)
+	{
+		// 如果建立位圖失敗，清理並回退
+		DeleteDC(memDC);
+		debugPrint(L"CCandidateWindow::_OnPaint() - CreateCompatibleBitmap failed, fallback to direct paint\n");
+		goto fallback_direct_paint;
+	}
+
+	oldBitmap = (HBITMAP)SelectObject(memDC, memBitmap);
+	hFontOld = (HFONT)SelectObject(memDC, Global::defaultlFontHandle);
+
+	// 設定記憶體 DC 的繪製屬性
+	SetBkMode(memDC, TRANSPARENT);
+
+	// 調整繪製矩形以對應記憶體 DC 座標（從 0,0 開始）
+	memRect = pPaintStruct->rcPaint;
+	OffsetRect(&memRect, -pPaintStruct->rcPaint.left, -pPaintStruct->rcPaint.top);
+
+	// 繪製背景
+	if(_brshBkColor)
+	{
+		FillRect(memDC, &memRect, _brshBkColor);
 	}
 
     UINT currentPageIndex = 0;
@@ -616,16 +659,57 @@ void CCandidateWindow::_OnPaint(_In_ HDC dcHandle, _In_ PAINTSTRUCT *pPaintStruc
 
     if (FAILED(_GetCurrentPage(&currentPage)))
     {
-        goto cleanup;
+        goto cleanup_double_buffer;
     }
-    
+
     _AdjustPageIndex(currentPage, currentPageIndex);
 
-    _DrawList(dcHandle, currentPageIndex, &pPaintStruct->rcPaint);
+	// 在記憶體 DC 上繪製候選列表
+    _DrawList(memDC, currentPageIndex, &memRect);
 
+	// 原子性地將記憶體 DC 內容複製到螢幕 DC
+	// 這是唯一會顯示在螢幕上的操作，確保無撕裂
+	BitBlt(dcHandle,
+		pPaintStruct->rcPaint.left,
+		pPaintStruct->rcPaint.top,
+		width,
+		height,
+		memDC,
+		0, 0,
+		SRCCOPY);
 
-cleanup:
-    SelectObject(dcHandle, hFontOld);
+cleanup_double_buffer:
+	// 清理雙緩衝資源
+    SelectObject(memDC, hFontOld);
+	SelectObject(memDC, oldBitmap);
+	DeleteObject(memBitmap);
+	DeleteDC(memDC);
+	return;
+
+fallback_direct_paint:
+	// 回退方案：直接繪製（用於資源不足的情況）
+    SetBkMode(dcHandle, TRANSPARENT);
+    HFONT hFontOld2 = (HFONT)SelectObject(dcHandle, Global::defaultlFontHandle);
+
+	if(_brshBkColor)
+	{
+		FillRect(dcHandle, &pPaintStruct->rcPaint,_brshBkColor);
+	}
+
+    UINT currentPageIndex2 = 0;
+    UINT currentPage2 = 0;
+
+    if (FAILED(_GetCurrentPage(&currentPage2)))
+    {
+        goto cleanup_fallback;
+    }
+
+    _AdjustPageIndex(currentPage2, currentPageIndex2);
+
+    _DrawList(dcHandle, currentPageIndex2, &pPaintStruct->rcPaint);
+
+cleanup_fallback:
+    SelectObject(dcHandle, hFontOld2);
 }
 
 //+---------------------------------------------------------------------------
