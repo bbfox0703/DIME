@@ -132,11 +132,11 @@ BOOL CNotifyWindow::_CreateMainWindow(_In_opt_ HWND parentWndHandle)
     _SetUIWnd(this);
 
 	if (!CBaseWindow::_Create(Global::AtomNotifyWindow,
-		WS_EX_TOPMOST | 
+		WS_EX_TOPMOST |
 #ifndef NO_ANIMATION
 		WS_EX_LAYERED |
 #endif
-		WS_EX_TOOLWINDOW,
+		WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,  // Windows 11 24H2: 防止通知視窗搶奪焦點
         WS_BORDER | WS_POPUP,
         NULL, 0, 0, parentWndHandle))
     {

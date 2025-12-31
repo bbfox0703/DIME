@@ -83,6 +83,9 @@ CCandidateWindow::CCandidateWindow(_In_ CANDWNDCALLBACK pfnCallback, _In_ void *
 	_x = -32768;
 	_y = -32768;
 
+	// 初始化 DPI 為標準 96 DPI
+	_currentDpi = 96;
+
 }
 
 //+---------------------------------------------------------------------------
@@ -144,8 +147,8 @@ BOOL CCandidateWindow::_CreateMainWindow(_In_opt_ HWND parentWndHandle)
     _SetUIWnd(this);
 
 	if (!CBaseWindow::_Create(Global::AtomCandidateWindow,
-        WS_EX_TOPMOST |  WS_EX_LAYERED |
-		WS_EX_TOOLWINDOW, 
+        WS_EX_TOPMOST | WS_EX_LAYERED |
+		WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,  // Windows 11 24H2: 防止候選視窗搶奪焦點
         WS_BORDER | WS_POPUP,
         NULL, 0, 0, parentWndHandle))
     {
@@ -165,8 +168,8 @@ BOOL CCandidateWindow::_CreateBackGroundShadowWindow()
     }
 
     if (!_pShadowWnd->_Create(Global::AtomCandidateShadowWindow,
-        WS_EX_TOPMOST | 
-		WS_EX_TOOLWINDOW | WS_EX_LAYERED,
+        WS_EX_TOPMOST |
+		WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_NOACTIVATE,  // Windows 11 24H2: 防止陰影視窗搶奪焦點
         WS_DISABLED | WS_POPUP, this))
     {
         _DeleteShadowWnd();
@@ -211,13 +214,18 @@ Exit:
 
 void CCandidateWindow::_ResizeWindow()
 {
-
 	debugPrint(L"CCandidateWindow::_ResizeWindow() _cxTitle = %d", _cxTitle);
 	if(_pIndexRange == nullptr) return;
+
+	// 更新 DPI 並套用縮放
+	_currentDpi = _GetDpiForWindow();
+
     int candidateListPageCnt = _pIndexRange->Count();
-	int VScrollWidth = GetSystemMetrics(SM_CXVSCROLL) * 3/2;
-	CBaseWindow::_Resize(_x, _y, _cxTitle + VScrollWidth +  CANDWND_BORDER_WIDTH*2, 
-		_cyRow * candidateListPageCnt + _cyRow /2  + CANDWND_BORDER_WIDTH *2);
+	int VScrollWidth = _ScaleByDPI(GetSystemMetrics(SM_CXVSCROLL) * 3/2);
+	int borderWidth = _ScaleByDPI(CANDWND_BORDER_WIDTH);
+
+	CBaseWindow::_Resize(_x, _y, _cxTitle + VScrollWidth + borderWidth * 2,
+		_cyRow * candidateListPageCnt + _cyRow / 2 + borderWidth * 2);
 
     RECT rcCandRect = {0, 0, 0, 0};
     _GetClientRect(&rcCandRect);
@@ -241,8 +249,11 @@ void CCandidateWindow::_ResizeWindow()
 void CCandidateWindow::_Move(int x, int y)
 {
 	debugPrint(L"CCandidateWindow::_Move() x =%d, y=%d", x,y);
-    
+
 	if (_x == x && _y == y) return;
+
+	// 更新當前 DPI（可能在多螢幕環境中變化）
+	_currentDpi = _GetDpiForWindow();
 
 	_x = x;
 	_y = y;
@@ -394,6 +405,35 @@ LRESULT CALLBACK CCandidateWindow::_WindowProcCallback(_In_ HWND wndHandle, UINT
         _DeleteShadowWnd();
         return 0;
 
+    case WM_DPICHANGED:
+        {
+            // Windows 11 24H2: 處理 DPI 變化（跨螢幕移動時）
+            UINT newDpi = HIWORD(wParam);
+            RECT* const prcNewWindow = (RECT*)lParam;
+
+            debugPrint(L"CCandidateWindow::WM_DPICHANGED: DPI %d -> %d", _currentDpi, newDpi);
+
+            // 更新當前 DPI
+            _currentDpi = newDpi;
+
+            // 調整視窗位置和大小到建議的矩形
+            if (prcNewWindow)
+            {
+                SetWindowPos(_GetWnd(),
+                    NULL,
+                    prcNewWindow->left,
+                    prcNewWindow->top,
+                    prcNewWindow->right - prcNewWindow->left,
+                    prcNewWindow->bottom - prcNewWindow->top,
+                    SWP_NOZORDER | SWP_NOACTIVATE);
+            }
+
+            // 重新計算視窗大小和內容佈局
+            _ResizeWindow();
+
+            return 0;
+        }
+
     case WM_WINDOWPOSCHANGED:
         {
             WINDOWPOS* pWndPos = (WINDOWPOS*)lParam;
@@ -467,8 +507,14 @@ LRESULT CALLBACK CCandidateWindow::_WindowProcCallback(_In_ HWND wndHandle, UINT
             PAINTSTRUCT ps;
 
             dcHandle = BeginPaint(wndHandle, &ps);
-			_DrawBorder(wndHandle, CANDWND_BORDER_WIDTH);
+
+			// 繪製客戶端區域內容（使用雙緩衝）
             _OnPaint(dcHandle, &ps);
+
+			// 繪製視窗邊框（使用獨立的視窗 DC）
+			// 注意：邊框繪製在視窗座標系統，與客戶端區域的雙緩衝分離
+			_DrawBorder(wndHandle, CANDWND_BORDER_WIDTH);
+
             EndPaint(wndHandle, &ps);
 			ReleaseDC(wndHandle, dcHandle);
 			debugPrint(L"CCandidateWindow::_WindowProcCallback():WM_PAINT ended. gdiObjects = %d", GetGuiResources(GetCurrentProcess(), GR_GDIOBJECTS));
@@ -562,13 +608,50 @@ void CCandidateWindow::_OnPaint(_In_ HDC dcHandle, _In_ PAINTSTRUCT *pPaintStruc
 
 	if(pPaintStruct == nullptr) return;
 
-    SetBkMode(dcHandle, TRANSPARENT);
+	// 實作雙緩衝以消除高刷新率螢幕的撕裂和殘影
+	// 計算繪製區域大小
+	int width = pPaintStruct->rcPaint.right - pPaintStruct->rcPaint.left;
+	int height = pPaintStruct->rcPaint.bottom - pPaintStruct->rcPaint.top;
 
-    HFONT hFontOld = (HFONT)SelectObject(dcHandle, Global::defaultlFontHandle);
-	
-	if(_brshBkColor) 
+	// 預先宣告變數以避免 goto 警告
+	HDC memDC = nullptr;
+	HBITMAP memBitmap = nullptr;
+	HBITMAP oldBitmap = nullptr;
+	HFONT hFontOld = nullptr;
+	RECT memRect = {0};
+
+	// 建立記憶體 DC 和相容位圖進行離屏繪製
+	memDC = CreateCompatibleDC(dcHandle);
+	if (!memDC)
 	{
-		FillRect(dcHandle, &pPaintStruct->rcPaint,_brshBkColor);
+		// 如果建立記憶體 DC 失敗，回退到直接繪製
+		debugPrint(L"CCandidateWindow::_OnPaint() - CreateCompatibleDC failed, fallback to direct paint\n");
+		goto fallback_direct_paint;
+	}
+
+	memBitmap = CreateCompatibleBitmap(dcHandle, width, height);
+	if (!memBitmap)
+	{
+		// 如果建立位圖失敗，清理並回退
+		DeleteDC(memDC);
+		debugPrint(L"CCandidateWindow::_OnPaint() - CreateCompatibleBitmap failed, fallback to direct paint\n");
+		goto fallback_direct_paint;
+	}
+
+	oldBitmap = (HBITMAP)SelectObject(memDC, memBitmap);
+	hFontOld = (HFONT)SelectObject(memDC, Global::defaultlFontHandle);
+
+	// 設定記憶體 DC 的繪製屬性
+	SetBkMode(memDC, TRANSPARENT);
+
+	// 調整繪製矩形以對應記憶體 DC 座標（從 0,0 開始）
+	memRect = pPaintStruct->rcPaint;
+	OffsetRect(&memRect, -pPaintStruct->rcPaint.left, -pPaintStruct->rcPaint.top);
+
+	// 繪製背景
+	if(_brshBkColor)
+	{
+		FillRect(memDC, &memRect, _brshBkColor);
 	}
 
     UINT currentPageIndex = 0;
@@ -576,16 +659,57 @@ void CCandidateWindow::_OnPaint(_In_ HDC dcHandle, _In_ PAINTSTRUCT *pPaintStruc
 
     if (FAILED(_GetCurrentPage(&currentPage)))
     {
-        goto cleanup;
+        goto cleanup_double_buffer;
     }
-    
+
     _AdjustPageIndex(currentPage, currentPageIndex);
 
-    _DrawList(dcHandle, currentPageIndex, &pPaintStruct->rcPaint);
+	// 在記憶體 DC 上繪製候選列表
+    _DrawList(memDC, currentPageIndex, &memRect);
 
+	// 原子性地將記憶體 DC 內容複製到螢幕 DC
+	// 這是唯一會顯示在螢幕上的操作，確保無撕裂
+	BitBlt(dcHandle,
+		pPaintStruct->rcPaint.left,
+		pPaintStruct->rcPaint.top,
+		width,
+		height,
+		memDC,
+		0, 0,
+		SRCCOPY);
 
-cleanup:
-    SelectObject(dcHandle, hFontOld);
+cleanup_double_buffer:
+	// 清理雙緩衝資源
+    SelectObject(memDC, hFontOld);
+	SelectObject(memDC, oldBitmap);
+	DeleteObject(memBitmap);
+	DeleteDC(memDC);
+	return;
+
+fallback_direct_paint:
+	// 回退方案：直接繪製（用於資源不足的情況）
+    SetBkMode(dcHandle, TRANSPARENT);
+    HFONT hFontOld2 = (HFONT)SelectObject(dcHandle, Global::defaultlFontHandle);
+
+	if(_brshBkColor)
+	{
+		FillRect(dcHandle, &pPaintStruct->rcPaint,_brshBkColor);
+	}
+
+    UINT currentPageIndex2 = 0;
+    UINT currentPage2 = 0;
+
+    if (FAILED(_GetCurrentPage(&currentPage2)))
+    {
+        goto cleanup_fallback;
+    }
+
+    _AdjustPageIndex(currentPage2, currentPageIndex2);
+
+    _DrawList(dcHandle, currentPageIndex2, &pPaintStruct->rcPaint);
+
+cleanup_fallback:
+    SelectObject(dcHandle, hFontOld2);
 }
 
 //+---------------------------------------------------------------------------
@@ -1699,4 +1823,68 @@ void CCandidateWindow::_DeleteVScrollBarWnd()
 {
 	debugPrint(L"CCandidateWindow::_DeleteVScrollBarWnd(), gdiObjects = %d", GetGuiResources(GetCurrentProcess(), GR_GDIOBJECTS));
     _pVScrollBarWnd.reset();
+}
+
+//+---------------------------------------------------------------------------
+//
+// _GetDpiForWindow
+//
+// 取得視窗的 DPI 值，支援 Windows 10 1607+ 的 Per-Monitor DPI
+// 向下相容：若 API 不存在，返回系統 DPI
+//
+//----------------------------------------------------------------------------
+UINT CCandidateWindow::_GetDpiForWindow()
+{
+    // 使用動態載入來支援 Windows 7/8/8.1
+    typedef UINT(WINAPI* PFN_GetDpiForWindow)(HWND);
+    static PFN_GetDpiForWindow pfnGetDpiForWindow = nullptr;
+    static BOOL bInitialized = FALSE;
+
+    if (!bInitialized)
+    {
+        HMODULE hUser32 = GetModuleHandleW(L"User32.dll");
+        if (hUser32)
+        {
+            pfnGetDpiForWindow = (PFN_GetDpiForWindow)GetProcAddress(hUser32, "GetDpiForWindow");
+        }
+        bInitialized = TRUE;
+    }
+
+    HWND hwnd = _GetWnd();
+    if (pfnGetDpiForWindow && hwnd)
+    {
+        UINT dpi = pfnGetDpiForWindow(hwnd);
+        if (dpi > 0)
+        {
+            return dpi;
+        }
+    }
+
+    // 降級方案：使用系統 DPI
+    HDC hdc = GetDC(nullptr);
+    if (hdc)
+    {
+        UINT dpi = GetDeviceCaps(hdc, LOGPIXELSX);
+        ReleaseDC(nullptr, hdc);
+        return dpi;
+    }
+
+    // 預設值
+    return 96;
+}
+
+//+---------------------------------------------------------------------------
+//
+// _ScaleByDPI
+//
+// 根據當前 DPI 縮放數值
+//
+//----------------------------------------------------------------------------
+int CCandidateWindow::_ScaleByDPI(int value)
+{
+    if (_currentDpi == 96)
+    {
+        return value;
+    }
+    return MulDiv(value, _currentDpi, 96);
 }

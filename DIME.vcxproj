@@ -379,7 +379,7 @@
       <LinkTimeCodeGeneration>UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
     </Link>
     <PreBuildEvent>
-      <Command>BuildInfo.cmd</Command>
+      <Command>$(ProjectDir)BuildInfo.cmd</Command>
     </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -406,7 +406,7 @@
       <LinkTimeCodeGeneration>UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
     </Link>
     <PreBuildEvent>
-      <Command>BuildInfo.cmd</Command>
+      <Command>$(ProjectDir)BuildInfo.cmd</Command>
     </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">
@@ -434,7 +434,7 @@
       <TargetMachine>MachineARM64</TargetMachine>
     </Link>
     <PreBuildEvent>
-      <Command>BuildInfo.cmd</Command>
+      <Command>$(ProjectDir)BuildInfo.cmd</Command>
     </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|ARM64EC'">
@@ -462,7 +462,7 @@
       <TargetMachine>MachineARM64X</TargetMachine>
     </Link>
     <PreBuildEvent>
-      <Command>BuildInfo.cmd</Command>
+      <Command>$(ProjectDir)BuildInfo.cmd</Command>
     </PreBuildEvent>
   </ItemDefinitionGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
