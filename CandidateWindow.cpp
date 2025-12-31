@@ -147,8 +147,8 @@ BOOL CCandidateWindow::_CreateMainWindow(_In_opt_ HWND parentWndHandle)
     _SetUIWnd(this);
 
 	if (!CBaseWindow::_Create(Global::AtomCandidateWindow,
-        WS_EX_TOPMOST |  WS_EX_LAYERED |
-		WS_EX_TOOLWINDOW, 
+        WS_EX_TOPMOST | WS_EX_LAYERED |
+		WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,  // Windows 11 24H2: 防止候選視窗搶奪焦點
         WS_BORDER | WS_POPUP,
         NULL, 0, 0, parentWndHandle))
     {
@@ -168,8 +168,8 @@ BOOL CCandidateWindow::_CreateBackGroundShadowWindow()
     }
 
     if (!_pShadowWnd->_Create(Global::AtomCandidateShadowWindow,
-        WS_EX_TOPMOST | 
-		WS_EX_TOOLWINDOW | WS_EX_LAYERED,
+        WS_EX_TOPMOST |
+		WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_NOACTIVATE,  // Windows 11 24H2: 防止陰影視窗搶奪焦點
         WS_DISABLED | WS_POPUP, this))
     {
         _DeleteShadowWnd();
@@ -404,6 +404,35 @@ LRESULT CALLBACK CCandidateWindow::_WindowProcCallback(_In_ HWND wndHandle, UINT
     case WM_DESTROY:
         _DeleteShadowWnd();
         return 0;
+
+    case WM_DPICHANGED:
+        {
+            // Windows 11 24H2: 處理 DPI 變化（跨螢幕移動時）
+            UINT newDpi = HIWORD(wParam);
+            RECT* const prcNewWindow = (RECT*)lParam;
+
+            debugPrint(L"CCandidateWindow::WM_DPICHANGED: DPI %d -> %d", _currentDpi, newDpi);
+
+            // 更新當前 DPI
+            _currentDpi = newDpi;
+
+            // 調整視窗位置和大小到建議的矩形
+            if (prcNewWindow)
+            {
+                SetWindowPos(_GetWnd(),
+                    NULL,
+                    prcNewWindow->left,
+                    prcNewWindow->top,
+                    prcNewWindow->right - prcNewWindow->left,
+                    prcNewWindow->bottom - prcNewWindow->top,
+                    SWP_NOZORDER | SWP_NOACTIVATE);
+            }
+
+            // 重新計算視窗大小和內容佈局
+            _ResizeWindow();
+
+            return 0;
+        }
 
     case WM_WINDOWPOSCHANGED:
         {
