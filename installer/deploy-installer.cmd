@@ -1,11 +1,12 @@
 @echo off
-mkdir "..\Installer\system32.x86"
-mkdir "..\Installer\system32.x64"
-mkdir "..\Installer\system32.arm64"
-copy ..\Release\DIMESettings.exe ..\Installer\
-copy ..\Release\x64\DIME.dll ..\Installer\system32.x64\
-copy ..\Release\arm64ec\DIME.dll ..\Installer\system32.arm64\
-copy ..\Release\Win32\DIME.dll ..\Installer\system32.x86\
+mkdir "system32.x86" 2>nul
+mkdir "system32.x64" 2>nul
+mkdir "system32.arm64" 2>nul
+copy ..\Release\DIMESettings.exe .
+copy ..\Release\x64\DIME.dll system32.x64\
+copy ..\Release\ARM64\DIME.dll system32.arm64\
+copy ..\Release\Win32\DIME.dll system32.x86\
+copy ..\Tables\*.cin .
 "c:\Program Files (x86)\NSIS\makensis.exe" DIME-x86armUniversal.nsi
 REM use the following line instead for buiding on x86 platform
 REM "c:\Program Files\NSIS\makensis.exe" DIME-x86armUniversal.nsi
