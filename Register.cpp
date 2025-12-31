@@ -34,6 +34,13 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "Private.h"
 #include "Globals.h"
 
+// 定義 GUID_TFCAT_TIPCAP_UILESSMODE（用於 Windows 8+ 的 UI-less 模式支援）
+// 此 GUID 可能不在舊版 SDK 中，所以手動定義
+#ifndef GUID_TFCAT_TIPCAP_UILESSMODE
+DEFINE_GUID(GUID_TFCAT_TIPCAP_UILESSMODE,
+    0x151D3930, 0x5385, 0x4B7C, 0x94, 0x92, 0xE6, 0xA5, 0x9A, 0x51, 0xFE, 0x9F);
+#endif
+
 static const WCHAR RegInfo_Prefix_CLSID[] = L"CLSID\\";
 static const WCHAR RegInfo_Key_InProSvr32[] = L"InProcServer32";
 static const WCHAR RegInfo_Key_ThreadModel[] = L"ThreadingModel";
@@ -41,12 +48,13 @@ static const WCHAR RegInfo_Key_ThreadModel[] = L"ThreadingModel";
 static const GUID SupportCategories[] = {
     GUID_TFCAT_TIP_KEYBOARD,
     GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER,
-    GUID_TFCAT_TIPCAP_UIELEMENTENABLED, 
+    GUID_TFCAT_TIPCAP_UIELEMENTENABLED,
     GUID_TFCAT_TIPCAP_SECUREMODE,
     GUID_TFCAT_TIPCAP_COMLESS,
     GUID_TFCAT_TIPCAP_INPUTMODECOMPARTMENT,
-    GUID_TFCAT_TIPCAP_IMMERSIVESUPPORT, 
+    GUID_TFCAT_TIPCAP_IMMERSIVESUPPORT,
     GUID_TFCAT_TIPCAP_SYSTRAYSUPPORT,
+    GUID_TFCAT_TIPCAP_UILESSMODE,  // Windows 11 24H2 支援 - UI-less 模式用於現代應用
 };
 //+---------------------------------------------------------------------------
 //

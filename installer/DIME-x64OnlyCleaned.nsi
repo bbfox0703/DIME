@@ -143,6 +143,18 @@ Section "MainSection" SEC01
   	${DisableX64FSRedirection}
     File "system32.x64\DIME.dll"
   	ExecWait '"$SYSDIR\regsvr32.exe" /s $SYSDIR\DIME.dll'
+
+  	; 設定 AppContainer 權限 - Windows 11 24H2 UWP/沙盒應用支援
+  	; 授予 "ALL APPLICATION PACKAGES" 讀取和執行權限
+  	DetailPrint "設定 AppContainer 權限..."
+  	nsExec::ExecToLog 'icacls "$SYSDIR\DIME.dll" /grant "*S-1-15-2-1:(RX)"'
+  	Pop $0
+  	${If} $0 != 0
+  		DetailPrint "警告: AppContainer 權限設定失敗 (錯誤碼: $0)，UWP 應用可能無法使用輸入法"
+  	${Else}
+  		DetailPrint "AppContainer 權限設定成功"
+  	${EndIf}
+
   	${EnableX64FSRedirection}
   ${EndIf}
   ExecWait '"$SYSDIR\regsvr32.exe" /s $SYSDIR\DIME.dll'

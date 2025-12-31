@@ -83,6 +83,9 @@ CCandidateWindow::CCandidateWindow(_In_ CANDWNDCALLBACK pfnCallback, _In_ void *
 	_x = -32768;
 	_y = -32768;
 
+	// 初始化 DPI 為標準 96 DPI
+	_currentDpi = 96;
+
 }
 
 //+---------------------------------------------------------------------------
@@ -211,13 +214,18 @@ Exit:
 
 void CCandidateWindow::_ResizeWindow()
 {
-
 	debugPrint(L"CCandidateWindow::_ResizeWindow() _cxTitle = %d", _cxTitle);
 	if(_pIndexRange == nullptr) return;
+
+	// 更新 DPI 並套用縮放
+	_currentDpi = _GetDpiForWindow();
+
     int candidateListPageCnt = _pIndexRange->Count();
-	int VScrollWidth = GetSystemMetrics(SM_CXVSCROLL) * 3/2;
-	CBaseWindow::_Resize(_x, _y, _cxTitle + VScrollWidth +  CANDWND_BORDER_WIDTH*2, 
-		_cyRow * candidateListPageCnt + _cyRow /2  + CANDWND_BORDER_WIDTH *2);
+	int VScrollWidth = _ScaleByDPI(GetSystemMetrics(SM_CXVSCROLL) * 3/2);
+	int borderWidth = _ScaleByDPI(CANDWND_BORDER_WIDTH);
+
+	CBaseWindow::_Resize(_x, _y, _cxTitle + VScrollWidth + borderWidth * 2,
+		_cyRow * candidateListPageCnt + _cyRow / 2 + borderWidth * 2);
 
     RECT rcCandRect = {0, 0, 0, 0};
     _GetClientRect(&rcCandRect);
@@ -241,8 +249,11 @@ void CCandidateWindow::_ResizeWindow()
 void CCandidateWindow::_Move(int x, int y)
 {
 	debugPrint(L"CCandidateWindow::_Move() x =%d, y=%d", x,y);
-    
+
 	if (_x == x && _y == y) return;
+
+	// 更新當前 DPI（可能在多螢幕環境中變化）
+	_currentDpi = _GetDpiForWindow();
 
 	_x = x;
 	_y = y;
@@ -1699,4 +1710,68 @@ void CCandidateWindow::_DeleteVScrollBarWnd()
 {
 	debugPrint(L"CCandidateWindow::_DeleteVScrollBarWnd(), gdiObjects = %d", GetGuiResources(GetCurrentProcess(), GR_GDIOBJECTS));
     _pVScrollBarWnd.reset();
+}
+
+//+---------------------------------------------------------------------------
+//
+// _GetDpiForWindow
+//
+// 取得視窗的 DPI 值，支援 Windows 10 1607+ 的 Per-Monitor DPI
+// 向下相容：若 API 不存在，返回系統 DPI
+//
+//----------------------------------------------------------------------------
+UINT CCandidateWindow::_GetDpiForWindow()
+{
+    // 使用動態載入來支援 Windows 7/8/8.1
+    typedef UINT(WINAPI* PFN_GetDpiForWindow)(HWND);
+    static PFN_GetDpiForWindow pfnGetDpiForWindow = nullptr;
+    static BOOL bInitialized = FALSE;
+
+    if (!bInitialized)
+    {
+        HMODULE hUser32 = GetModuleHandleW(L"User32.dll");
+        if (hUser32)
+        {
+            pfnGetDpiForWindow = (PFN_GetDpiForWindow)GetProcAddress(hUser32, "GetDpiForWindow");
+        }
+        bInitialized = TRUE;
+    }
+
+    HWND hwnd = _GetWnd();
+    if (pfnGetDpiForWindow && hwnd)
+    {
+        UINT dpi = pfnGetDpiForWindow(hwnd);
+        if (dpi > 0)
+        {
+            return dpi;
+        }
+    }
+
+    // 降級方案：使用系統 DPI
+    HDC hdc = GetDC(nullptr);
+    if (hdc)
+    {
+        UINT dpi = GetDeviceCaps(hdc, LOGPIXELSX);
+        ReleaseDC(nullptr, hdc);
+        return dpi;
+    }
+
+    // 預設值
+    return 96;
+}
+
+//+---------------------------------------------------------------------------
+//
+// _ScaleByDPI
+//
+// 根據當前 DPI 縮放數值
+//
+//----------------------------------------------------------------------------
+int CCandidateWindow::_ScaleByDPI(int value)
+{
+    if (_currentDpi == 96)
+    {
+        return value;
+    }
+    return MulDiv(value, _currentDpi, 96);
 }

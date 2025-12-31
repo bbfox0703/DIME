@@ -122,6 +122,10 @@ private:
     void _DeleteShadowWnd();
     void _DeleteVScrollBarWnd();
 
+    // DPI 支援函數 - Windows 10 1607+ (向下相容)
+    UINT _GetDpiForWindow();
+    int _ScaleByDPI(int value);
+
     friend COLORREF _AdjustTextColor(_In_ COLORREF crColor, _In_ COLORREF crBkColor);
 
 private:
@@ -158,4 +162,7 @@ private:
 
 	int _x;
 	int _y;
+
+	// DPI 感知支援
+	UINT _currentDpi;
 };
