@@ -30,6 +30,16 @@ $installDir = "$env:ProgramFiles\DIME"
 if (Test-Path $installDir) {
     Write-Host "   [OK] Install directory found at: $installDir" -ForegroundColor Green
     Get-ChildItem $installDir | Format-Table Name, Length, LastWriteTime -AutoSize
+
+    # Check for .cin files specifically
+    Write-Host "`n   Checking IME Tables (.cin files)..." -ForegroundColor Cyan
+    $cinFiles = Get-ChildItem "$installDir\*.cin" -ErrorAction SilentlyContinue
+    if ($cinFiles) {
+        Write-Host "   [OK] Found $($cinFiles.Count) .cin file(s)" -ForegroundColor Green
+        $cinFiles | Format-Table Name, Length -AutoSize
+    } else {
+        Write-Host "   [FAIL] No .cin files found - IME tables are missing!" -ForegroundColor Red
+    }
 } else {
     Write-Host "   [FAIL] Install directory NOT found" -ForegroundColor Red
 }
