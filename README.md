@@ -10,35 +10,35 @@ DIME 是一個適用於 Windows 7/8/10/11 的中文輸入法編輯器（IME）�
 
 ---
 
-## ✨ 最新改善（2025 Jul-2026 W3）
+## 最新改善（2025 Jul-2026 W3）
 
-### 🎯 Windows 11 24H2/25H2 完整支援
+### Windows 11 24H2/25H2 完整支援
 - ✅ **WS_EX_NOACTIVATE** - 候選視窗不再搶奪焦點
 - ✅ **Per-Monitor V2 DPI** - 完美支援高 DPI 和多螢幕環境
 - ✅ **AppContainer 權限** - 支援 UWP 和 Microsoft Store 應用程式
 
-### ⚡ 效能大幅提升
+### 效能提升
 - ✅ **雙緩衝渲染** - 完全支援 120Hz/144Hz/240Hz 高刷新率顯示器
 - ✅ **輸入延遲優化** - 回應時間 ~160-350μs（比 Windows 11 要求快 3-6 倍）
 - ✅ **零撕裂、零重影** - 流暢的視覺體驗
 
-### 🎮 DirectX 12 完全相容
+### DirectX 12 完全相容
 - ✅ **UI-less 模式** - 完整支援全螢幕遊戲和 DirectX 應用程式
 - ✅ **零開銷** - 與遊戲渲染管線無縫整合
 - ✅ **評分：⭐⭐⭐⭐⭐** - [查看詳細評估報告](docs/DirectX12_Compatibility_Assessment.md)
 
-### 🌏 現代化編碼
+### 現代化編碼
 - ✅ **UTF-8 原始碼** - 從 Big5 (CP950) 轉換為 UTF-8 (CP65001)
 - ✅ **改善開發體驗** - 更好的 Git 相容性和跨平台支援
 
-### 📦 安裝程式改善
+### 安裝程式改善
 - ✅ **自動驗證** - check_install.ps1 PowerShell 驗證腳本
 
 **詳細變更記錄**: [CHANGELOG_SINCE_8d01deb.md](CHANGELOG_SINCE_8d01deb.md)
 
 ---
 
-## 📋 支援的輸入法
+## 支援的輸入法
 
 - **行列 30/40** - 包含多種變體和詞庫
 - **注音（ㄅㄆㄇㄈ）** - 傳統注音輸入
@@ -49,7 +49,7 @@ DIME 是一個適用於 Windows 7/8/10/11 的中文輸入法編輯器（IME）�
 
 ---
 
-## 🛠️ 建置方式
+## 建置方式
 
 ### 前置條件
 
@@ -107,7 +107,7 @@ powershell -ExecutionPolicy Bypass -File check_install.ps1
 
 ---
 
-## 💻 系統需求
+## 系統需求
 
 ### 最低需求
 
@@ -146,7 +146,7 @@ powershell -ExecutionPolicy Bypass -File check_install.ps1
 
 ---
 
-## 🎯 主要特色
+## 主要特色
 
 ### Windows 11 最佳化
 
@@ -178,7 +178,7 @@ powershell -ExecutionPolicy Bypass -File check_install.ps1
 
 ---
 
-## 📚 文檔
+## 文檔
 
 ### 使用者文檔
 
@@ -204,7 +204,7 @@ powershell -ExecutionPolicy Bypass -File check_install.ps1
 
 ---
 
-## 🔧 設定
+## 設定
 
 安裝後，可透過以下方式設定：
 
@@ -218,12 +218,12 @@ powershell -ExecutionPolicy Bypass -File check_install.ps1
 
 ---
 
-## 🐛 已知問題與限制
+## 已知問題與限制
 
 ### Windows 7 限制
 
-- ❌ 不支援 UI-less 模式（DirectX 全螢幕遊戲可能無法顯示候選視窗）
-- ⚠️ DPI 縮放功能受限
+- 不支援 UI-less 模式（DirectX 全螢幕遊戲可能無法顯示候選視窗）
+- DPI 縮放功能受限
 
 ### 遊戲反作弊系統
 
@@ -234,16 +234,6 @@ powershell -ExecutionPolicy Bypass -File check_install.ps1
 ### 觸控鍵盤
 
 Windows 10/11 的觸控鍵盤已實現整合，但某些情況下可能需要手動調整候選視窗位置。
-
----
-
-## 🤝 貢獻
-
-本專案歡迎貢獻！如果您發現問題或有改善建議：
-
-1. **提交 Issue** - 描述問題或建議
-2. **提交 Pull Request** - 包含詳細的變更說明
-3. **測試與回饋** - 在不同環境中測試並回報結果
 
 ### 開發流程
 
@@ -270,7 +260,7 @@ git push origin feature/your-feature-name
 
 ---
 
-## 📊 效能基準測試
+## 效能基準測試
 
 ### 輸入延遲
 
@@ -290,40 +280,15 @@ git push origin feature/your-feature-name
 
 ---
 
-## 📜 授權
+## 授權
 
 本專案基於 [BSD 3-Clause License](LICENSE) 授權。
 
 ---
 
-## 🙏 特別感謝
-
-- **[jrywu](https://github.com/jrywu)** - 原始 DIME 專案作者
-- **Claude Code** - 技術評估報告和文檔完善
-- **所有貢獻者和測試者**
-
----
-
-## 🔗 相關連結
+## 相關連結
 
 - **原始專案**: [jrywu/DIME](https://github.com/jrywu/DIME)
 - **Microsoft TSF 文檔**: [Text Services Framework](https://docs.microsoft.com/en-us/windows/win32/tsf/text-services-framework)
 - **DirectX 12 Programming Guide**: [Microsoft Docs](https://docs.microsoft.com/en-us/windows/win32/direct3d12/directx-12-programming-guide)
 - **High DPI Development**: [Microsoft Docs](https://docs.microsoft.com/en-us/windows/win32/hidpi/high-dpi-desktop-application-development-on-windows)
-
----
-
-## 📞 支援
-
-如有問題或需要協助：
-
-1. **查看文檔** - [CHANGELOG_SINCE_8d01deb.md](CHANGELOG_SINCE_8d01deb.md) 和 [CLAUDE.md](CLAUDE.md)
-2. **執行驗證** - `check_install.ps1` 和 `test_deployment.ps1`
-3. **提交 Issue** - 在 GitHub 上報告問題
-4. **查看評估報告** - [docs/](docs/) 目錄中的技術評估報告
-
----
-
-*最後更新：2026-01-15*
-*當前版本：基於 commit 3ce6408*
-*從 commit 8d01deb 起共 32+ 個重大改善*
