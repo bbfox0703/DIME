@@ -371,6 +371,10 @@ void CScrollBarWindow::_Resize(int x, int y, int cx, int cy)
 {
     CBaseWindow::_Resize(x, y, cx, cy);
 
+    // 更新按鈕尺寸為傳入的寬度（已由 CCandidateWindow 進行 DPI 縮放）
+    _sizeOfScrollBtn.cx = cx;
+    _sizeOfScrollBtn.cy = cx;  // 按鈕為正方形
+
     RECT rc = {0, 0, 0, 0};
 
     _GetBtnUpRect(&rc);
@@ -458,11 +462,12 @@ void CScrollBarWindow::_AdjustWindowPos()
     }
 
     GetWindowRect(pParent->_GetWnd(), &rc);
+    // 使用已儲存的按鈕尺寸（由 _Resize() 設定，已包含 DPI 縮放）
+    // 注意：CANDWND_BORDER_WIDTH 的縮放由父視窗處理，這裡只需維持相對位置
 	SetWindowPos(_GetWnd(), pParent->_GetWnd(),
-		rc.left + (rc.right - rc.left) - GetSystemMetrics(SM_CXVSCROLL) * 3/2 - CANDWND_BORDER_WIDTH,
+		rc.left + (rc.right - rc.left) - _sizeOfScrollBtn.cx - CANDWND_BORDER_WIDTH,
         rc.top + CANDWND_BORDER_WIDTH,
-        
-		GetSystemMetrics(SM_CXVSCROLL) *3/ 2,
+        _sizeOfScrollBtn.cx,
 		rc.bottom - rc.top - CANDWND_BORDER_WIDTH * 2,
         SWP_NOOWNERZORDER | SWP_NOACTIVATE);
 }
