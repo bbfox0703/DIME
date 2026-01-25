@@ -221,7 +221,7 @@ void CCandidateWindow::_ResizeWindow()
 	_currentDpi = _GetDpiForWindow();
 
     int candidateListPageCnt = _pIndexRange->Count();
-	int VScrollWidth = _ScaleByDPI(GetSystemMetrics(SM_CXVSCROLL) * 3/2);
+	int VScrollWidth = _GetSystemMetricsForDpi(SM_CXVSCROLL) * 3 / 2;
 	int borderWidth = _ScaleByDPI(CANDWND_BORDER_WIDTH);
 
 	CBaseWindow::_Resize(_x, _y, _cxTitle + VScrollWidth + borderWidth * 2,
@@ -238,6 +238,20 @@ void CCandidateWindow::_ResizeWindow()
 
 	if(_pVScrollBarWnd)
 		_pVScrollBarWnd->_Resize(left, top, width, height);
+}
+
+//+---------------------------------------------------------------------------
+//
+// _GetWidth
+//
+// 取得候選視窗寬度（含 DPI 縮放）
+//
+//----------------------------------------------------------------------------
+UINT CCandidateWindow::_GetWidth()
+{
+    int VScrollWidth = _GetSystemMetricsForDpi(SM_CXVSCROLL) * 3 / 2;
+    int borderWidth = _ScaleByDPI(CANDWND_BORDER_WIDTH);
+    return _cxTitle + VScrollWidth + borderWidth * 2;
 }
 
 //+---------------------------------------------------------------------------
@@ -742,7 +756,7 @@ void CCandidateWindow::_OnLButtonDown(POINT pt)
 
 	RECT rc = {0, 0, 0, 0};
 	rc.left = rcWindow.left + PageCountPosition* _TextMetric.tmAveCharWidth;
-    rc.right = rcWindow.right  - GetSystemMetrics(SM_CXVSCROLL) * 3/2 - CANDWND_BORDER_WIDTH;
+    rc.right = rcWindow.right - _GetSystemMetricsForDpi(SM_CXVSCROLL) * 3 / 2 - _ScaleByDPI(CANDWND_BORDER_WIDTH);
 
     for (UINT pageCount = 0; (index < _candidateList.Count()) && (pageCount < candidateListPageCnt); index++, pageCount++)
     {	
@@ -831,7 +845,7 @@ void CCandidateWindow::_OnMouseMove(POINT pt)
 #endif
 
 	rc.left = rcWindow.left;
-	rc.right = rcWindow.right - GetSystemMetrics(SM_CXVSCROLL) * 3 / 2 - CANDWND_BORDER_WIDTH;
+	rc.right = rcWindow.right - _GetSystemMetricsForDpi(SM_CXVSCROLL) * 3 / 2 - _ScaleByDPI(CANDWND_BORDER_WIDTH);
 
 	rc.top = rcWindow.top;
 	rc.bottom = rcWindow.bottom;
@@ -904,7 +918,7 @@ void CCandidateWindow::_DrawList(_In_ HDC dcHandle, _In_ UINT currentPageIndex, 
 	
     int indexInPage = 0;
     int candidateListPageCnt = _pIndexRange->Count();
-	int VScrollWidth = GetSystemMetrics(SM_CXVSCROLL) *3/2;
+	int VScrollWidth = _GetSystemMetricsForDpi(SM_CXVSCROLL) * 3 / 2;
 
     RECT rc = { 0,0,0,0 };
 	const size_t numStringLen = 2;
@@ -1887,4 +1901,50 @@ int CCandidateWindow::_ScaleByDPI(int value)
         return value;
     }
     return MulDiv(value, _currentDpi, 96);
+}
+
+//+---------------------------------------------------------------------------
+//
+// _GetSystemMetricsForDpi
+//
+// 取得指定 DPI 下的系統度量值
+// Windows 10 1607+：使用 GetSystemMetricsForDpi API
+// 舊版 Windows：手動換算
+//
+//----------------------------------------------------------------------------
+int CCandidateWindow::_GetSystemMetricsForDpi(int nIndex)
+{
+    typedef int(WINAPI* PFN_GetSystemMetricsForDpi)(int, UINT);
+    static PFN_GetSystemMetricsForDpi pfnGetSystemMetricsForDpi = nullptr;
+    static BOOL bInitialized = FALSE;
+
+    if (!bInitialized)
+    {
+        HMODULE hUser32 = GetModuleHandleW(L"User32.dll");
+        if (hUser32)
+        {
+            pfnGetSystemMetricsForDpi = (PFN_GetSystemMetricsForDpi)
+                GetProcAddress(hUser32, "GetSystemMetricsForDpi");
+        }
+        bInitialized = TRUE;
+    }
+
+    if (pfnGetSystemMetricsForDpi && _currentDpi > 0)
+    {
+        return pfnGetSystemMetricsForDpi(nIndex, _currentDpi);
+    }
+
+    // Fallback：手動計算
+    int value = GetSystemMetrics(nIndex);
+    HDC hdc = GetDC(nullptr);
+    if (hdc)
+    {
+        int systemDpi = GetDeviceCaps(hdc, LOGPIXELSX);
+        ReleaseDC(nullptr, hdc);
+        if (systemDpi != (int)_currentDpi && systemDpi > 0)
+        {
+            value = MulDiv(value, _currentDpi, systemDpi);
+        }
+    }
+    return value;
 }
