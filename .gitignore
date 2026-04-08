@@ -227,26 +227,4 @@ nul
 
 # repos specified
 /reference/
-installer/array-shortcode-20161018.cin
-installer/Array-shortcode-20170111_DIME.cin
-installer/array-shortcode-20201106.cin
-installer/array-shortcode-20210725.cin
-installer/array-shortcode_20110822.cin
-installer/array30-OpenVanilla-big-v2023-1.0-20230211.cin
-installer/array30_DIME_0.8-A.cin
-installer/array30_DIME_0.8-B.cin
-installer/array30_DIME_0.8-CD.cin
-installer/array30_DIME_0.8-E.cin
-installer/array30_DIME_0.8-EF.cin
-installer/array30_DIME_0.9-A.cin
-installer/array30_DIME_0.9-B.cin
-installer/array30_DIME_0.9-CD.cin
-installer/array30_DIME_0.9-EFG.cin
-installer/array30_DIME_A.cin
-installer/array30_DIME_B.cin
-installer/array30_DIME_CD.cin
-installer/array30_DIME_EFG.cin
-installer/array30_DIME_phrase.cin
-installer/array30_OpenVanilla-big-0.94.cin
-installer/array40-DIME-big5.cin
-installer/array_special_DIME_0.75.cin
+installer/*.cin
