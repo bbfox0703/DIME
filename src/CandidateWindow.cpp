@@ -218,12 +218,6 @@ const int PageCountPosition = 1;
 const int StringPosition = 2;
 
 
-UINT CCandidateWindow::_GetWidth()
-{
-	int sbWidth = _pVScrollBarWnd ? _pVScrollBarWnd->_GetHoverWidth() : MulDiv(SCROLLBAR_HOVER_WIDTH, CConfig::GetDpiForHwnd(_GetWnd()), USER_DEFAULT_SCREEN_DPI);
-	return _cxTitle + sbWidth + CANDWND_BORDER_WIDTH *2;
-}
-
 void CCandidateWindow::_ResizeWindow()
 {
 
@@ -450,8 +444,9 @@ LRESULT CALLBACK CCandidateWindow::_WindowProcCallback(_In_ HWND wndHandle, UINT
 
             debugPrint(L"CCandidateWindow::WM_DPICHANGED: DPI %d -> %d", _currentDpi, newDpi);
 
-            // 更新當前 DPI
+            // 更新當前 DPI 並重建字型
             _currentDpi = newDpi;
+            CConfig::SetDefaultTextFont(_GetWnd());
 
             // 調整視窗位置和大小到建議的矩形
             if (prcNewWindow)
@@ -655,22 +650,6 @@ LRESULT CALLBACK CCandidateWindow::_WindowProcCallback(_In_ HWND wndHandle, UINT
         _OnVScroll(LOWORD(wParam), HIWORD(wParam));
         return 0;
 
-    case WM_DPICHANGED:
-    {
-        // Recreate font at the new monitor DPI
-        CConfig::SetDefaultTextFont(wndHandle);
-        // Use the suggested new window rect from Windows
-        RECT* prcNew = reinterpret_cast<RECT*>(lParam);
-        if (prcNew)
-        {
-            SetWindowPos(wndHandle, NULL,
-                prcNew->left, prcNew->top,
-                prcNew->right - prcNew->left,
-                prcNew->bottom - prcNew->top,
-                SWP_NOZORDER | SWP_NOACTIVATE);
-        }
-        return 0;
-    }
     }
 
     return DefWindowProc(wndHandle, uMsg, wParam, lParam);
@@ -766,8 +745,8 @@ void CCandidateWindow::_OnPaint(_In_ HDC dcHandle, _In_ PAINTSTRUCT *pPaintStruc
 
     _AdjustPageIndex(currentPage, currentPageIndex);
 
-    _DrawList(dcHandle, currentPageIndex, &pPaintStruct->rcPaint);
-    _DrawPageIndicator(dcHandle, currentPage, &pPaintStruct->rcPaint);
+    _DrawList(memDC, currentPageIndex, &memRect);
+    _DrawPageIndicator(memDC, currentPage, &memRect);
 
 	// 原子性地將記憶體 DC 內容複製到螢幕 DC
 	// 這是唯一會顯示在螢幕上的操作，確保無撕裂
