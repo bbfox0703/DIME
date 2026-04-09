@@ -1017,6 +1017,16 @@ void CUIPresenter::GetCandLocation(_Out_ POINT *lpPoint) const
 	}
 }
 
+void CUIPresenter::_MoveCandidateTo(int x, int y)
+{
+	if (_pCandidateWnd)
+	{
+		_pCandidateWnd->_Move(x, y);
+		_candLocation.x = x;
+		_candLocation.y = y;
+	}
+}
+
 //+---------------------------------------------------------------------------
 //
 // _LayoutDestroyNotification

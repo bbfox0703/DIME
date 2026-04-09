@@ -148,6 +148,7 @@ public:
     void AdviseUIChangedByArrowKey(_In_ KEYSTROKE_FUNCTION arrowKey);
 
 	void GetCandLocation(_Out_ POINT *lpPoint) const;
+	void _MoveCandidateTo(int x, int y);
 
 	HRESULT MakeNotifyWindow(_In_ ITfContext *pContextDocument, _In_ CStringRange *pNotifyText =nullptr, _In_ enum NOTIFY_TYPE notifyType = NOTIFY_TYPE::NOTIFY_OTHERS);
 	void SetNotifyText(_In_ CStringRange *pNotifyText);
