@@ -1,4 +1,4 @@
-/* DIME IME for Windows 7/8/10/11
+﻿/* DIME IME for Windows 7/8/10/11
 
 BSD 3-Clause License
 
@@ -77,7 +77,7 @@ STDAPI CDIME::OnActivated(_In_ REFCLSID clsid, _In_ REFGUID guidProfile, _In_ BO
 		debugPrint(L"activating with imeMode = %d", Global::imeMode);
 		_pCompositionProcessorEngine->SetImeMode(guidProfile);
 
-		if (!_AddTextProcessorEngine())  return S_OK;
+		if (!_AddTextProcessorEngine(TEXTSERVICE_LANGID, guidProfile))  return S_OK;
 
 		ShowAllLanguageBarIcons();
 

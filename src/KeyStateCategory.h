@@ -1,4 +1,4 @@
-/* DIME IME for Windows 7/8/10/11
+﻿/* DIME IME for Windows 7/8/10/11
 
 BSD 3-Clause License
 
@@ -139,10 +139,7 @@ protected:
     // HandleKeyAddressChar
        virtual HRESULT HandleKeyAddressChar(KeyHandlerEditSessionDTO dto);
 
-	// HandleKeyShiftEnglishInput
-       virtual HRESULT HandleKeyShiftEnglishInput(KeyHandlerEditSessionDTO dto);
 
-	
 protected:
     CDIME* _pTextService;
 };
@@ -201,9 +198,6 @@ protected:
     // HandleKeyAddressChar
        HRESULT HandleKeyAddressChar(KeyHandlerEditSessionDTO dto);
 
-	// HandleKeyShiftEnglishInput
-       HRESULT HandleKeyShiftEnglishInput(KeyHandlerEditSessionDTO dto);
-	
 
 };
 

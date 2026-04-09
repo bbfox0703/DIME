@@ -160,8 +160,6 @@ enum class KEYSTROKE_FUNCTION
     // Function Punctuation
     FUNCTION_ADDRESS_DIRECT_INPUT,
 
-    // Function Shift+letter for English input (inverted case)
-    FUNCTION_SHIFT_ENGLISH_INPUT
 };
 
 //---------------------------------------------------------------------

@@ -1,4 +1,4 @@
-/* DIME IME for Windows 7/8/10/11
+﻿/* DIME IME for Windows 7/8/10/11
 
 BSD 3-Clause License
 
@@ -170,8 +170,7 @@ public:
     HRESULT _HandleCompositionBackspace(TfEditCookie ec, _In_ ITfContext *pContext);
     HRESULT _HandleCompositionArrowKey(TfEditCookie ec, _In_ ITfContext *pContext, KEYSTROKE_FUNCTION keyFunction);
     HRESULT _HandleCompositionDoubleSingleByte(TfEditCookie ec, _In_ ITfContext *pContext, WCHAR wch);
-	HRESULT _HandleCompositionShiftEnglishInput(TfEditCookie ec, _In_ ITfContext *pContext, UINT code, WCHAR wch);
-	HRESULT _HandleCompositionAddressChar(TfEditCookie ec, _In_ ITfContext *pContext, WCHAR wch);
+HRESULT _HandleCompositionAddressChar(TfEditCookie ec, _In_ ITfContext *pContext, WCHAR wch);
 	
     // key event handlers for candidate object.
     HRESULT _HandleCandidateFinalize(TfEditCookie ec, _In_ ITfContext *pContext);
@@ -397,8 +396,6 @@ private:
 
 	BOOL _isChinese;
 	BOOL _isFullShape;
-	BOOL _isShiftedEnglish;
-	BOOL _pendingWildcardInput;
 	BOOL _lastKeyboardMode;
 	
 	CStringRange lastReadingString;

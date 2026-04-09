@@ -639,53 +639,6 @@ BOOL CCompositionProcessorEngine::IsVirtualKeyNeed(UINT uCode, _In_reads_(1) WCH
 	return FALSE;
 	}
 	
-	// Handle Shift+printable ASCII for English input mode-----------------------------------------------------
-	// Only when not composing (empty buffer)
-	// Note: Shift+Space is handled by the preserved key system (OnPreservedKey)
-	if (!(Global::imeMode == IME_MODE::IME_MODE_PHONETIC && IsEscapeInputLeading()) &&
-		!fComposing && pwch && *pwch && (Global::ModifiersValue & (TF_MOD_LSHIFT | TF_MOD_RSHIFT | TF_MOD_SHIFT)) != 0 )
-	{
-		WCHAR c = *pwch;
-
-		// Check for printable ASCII characters (iswprint filters control chars)
-		// Exclude valid wildcard chars so they enter composition for wildcard search
-		// In Phonetic mode, only ? is a valid wildcard (* is not mapped)
-		if (iswprint(c) && c != L' ' &&
-			!(IsWildcardChar(c) && !(Global::imeMode == IME_MODE::IME_MODE_PHONETIC && c == L'*')))  // Exclude space as it's handled by preserved key
-		{
-			// Check if key is in the radical map (or Dayi address char table) for the active IME mode
-			// If not, bypass to system without processing
-			// Use base (unshifted) char from virtual key code, not the shifted char in c
-			// e.g. Shift+, sends '<' but ',' is the radical key to check
-			WCHAR baseChar = (WCHAR)MapVirtualKey(uCode, MAPVK_VK_TO_CHAR);
-			if (Global::imeMode == IME_MODE::IME_MODE_DAYI && IsDayiAddressChar(baseChar))
-			{
-				// Dayi address char (`, ', [, ], -, \) — skip radical map check
-			}
-			else
-			{
-				WCHAR upper = towupper(baseChar);
-				if (upper >= 32 && upper < 32 + MAX_RADICAL && (UINT)(upper - 32) < _KeystrokeComposition.Count())
-				{
-					const _KEYSTROKE& ks = *_KeystrokeComposition.GetAt(upper - 32);
-					if (ks.Function == KEYSTROKE_FUNCTION::FUNCTION_NONE)
-						return FALSE;  // Not a radical key — bypass to system
-				}
-				else
-				{
-					return FALSE;  // Out of range — bypass to system
-				}
-			}
-
-			if (pKeyState)
-			{
-				pKeyState->Category = KEYSTROKE_CATEGORY::CATEGORY_COMPOSING;
-				pKeyState->Function = KEYSTROKE_FUNCTION::FUNCTION_SHIFT_ENGLISH_INPUT;
-			}
-			return TRUE;
-		}
-	}
-	
 	//Processing Composing keys -------------------------------------------------------------------------------------------
 	if (fComposing)
 	{
@@ -861,7 +814,7 @@ BOOL CCompositionProcessorEngine::IsVirtualKeyKeystrokeComposition(UINT uCode, P
 	//debugPrint(L"CCompositionProcessorEngine::IsVirtualKeyKeystrokeComposition() pwch=%c, uCode=%d, function=%d", *pwch, uCode, function);
 
 	
-	if (!IsDictionaryAvailable(_imeMode) || pKeyState == nullptr || _KeystrokeComposition.Count() == 0)
+	if (!IsDictionaryAvailable(Global::imeMode) || pKeyState == nullptr || _KeystrokeComposition.Count() == 0)
 	{
 		return FALSE;
 	}

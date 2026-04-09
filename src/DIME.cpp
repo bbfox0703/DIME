@@ -256,8 +256,6 @@ CDIME::CDIME()
 	_isChinese = FALSE;
 	_lastKeyboardMode = FALSE;
 	_isFullShape = FALSE;
-	_isShiftedEnglish = FALSE;
-	_pendingWildcardInput = FALSE;
 
 	// Get Process Integrity level
 	DWORD err = 0;

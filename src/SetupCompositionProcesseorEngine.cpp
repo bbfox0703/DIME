@@ -1256,37 +1256,8 @@ void CCompositionProcessorEngine::OnPreservedKey(REFGUID rguid, _Out_ BOOL* pIsE
 	{
 		if (CConfig::GetDoubleSingleByteMode() != DOUBLE_SINGLE_BYTE_MODE::DOUBLE_SINGLE_BYTE_SHIFT_SPACE)
 		{
-			// When not in Shift-Space switching mode, inject a space character instead
-			ITfDocumentMgr* pDocMgrFocus = nullptr;
-			ITfContext* pContext = nullptr;
-			
-			if (SUCCEEDED(pThreadMgr->GetFocus(&pDocMgrFocus)) && pDocMgrFocus)
-			{
-				if (SUCCEEDED(pDocMgrFocus->GetTop(&pContext)) && pContext)
-				{
-					// Inject space character via shift English input handler
-					_KEYSTROKE_STATE keyState;
-					keyState.Category = KEYSTROKE_CATEGORY::CATEGORY_COMPOSING;
-					keyState.Function = KEYSTROKE_FUNCTION::FUNCTION_SHIFT_ENGLISH_INPUT;
-					
-					if (_pTextService)
-					{
-						// Create an edit session to inject the space character
-						CKeyHandlerEditSession* pEditSession = new (std::nothrow) CKeyHandlerEditSession(_pTextService, pContext, VK_SPACE, L' ', keyState);
-						if (pEditSession)
-						{
-							HRESULT hrSession = S_OK;
-							pContext->RequestEditSession(_pTextService->_GetClientId(), pEditSession, TF_ES_ASYNCDONTCARE | TF_ES_READWRITE, &hrSession);
-							pEditSession->Release();
-						}
-					}
-					
-					pContext->Release();
-				}
-				pDocMgrFocus->Release();
-			}
-			
-			*pIsEaten = TRUE;
+			// When not in Shift-Space switching mode, let the space pass through to the application
+			*pIsEaten = FALSE;
 			return;
 		}
 		BOOL isDouble = FALSE;
@@ -1660,9 +1631,9 @@ void CCompositionProcessorEngine::SetupCandidateListRange(IME_MODE imeMode)
 		}
 		if (pNewPhraseIndexRange != nullptr)
 		{
-			StringCchCopy(phraseSelKey, MAX_CAND_SELKEY, L"!@#$%^&*()");
+			StringCchCopy(phraseSelKey, MAX_CAND_SELKEY, L"1234567890");
 			pNewPhraseIndexRange->Printable = phraseSelKey[i];
-			
+
 			UINT vKey, modifier;
 			GetVKeyFromPrintable(phraseSelKey[i], &vKey, &modifier);
 			pNewPhraseIndexRange->VirtualKey = vKey;
@@ -1670,15 +1641,12 @@ void CCompositionProcessorEngine::SetupCandidateListRange(IME_MODE imeMode)
 			if (i != 9)
 			{
 				pNewPhraseIndexRange->Index = i + 1;
-				pNewPhraseIndexRange->CandIndex = WCHAR(i + 1 +0x30);  //ASCII 0x3x = x 
-				pNewPhraseIndexRange->Modifiers = TF_MOD_SHIFT;
+				pNewPhraseIndexRange->CandIndex = WCHAR(i + 1 +0x30);  //ASCII 0x3x = x
 			}
 			else
 			{
 				pNewPhraseIndexRange->CandIndex = L'0';
 				pNewPhraseIndexRange->Index = 0;
-				pNewPhraseIndexRange->Modifiers = TF_MOD_SHIFT;
-
 			}
 
 		}
