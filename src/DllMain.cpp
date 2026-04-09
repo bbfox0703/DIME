@@ -1,0 +1,198 @@
+﻿/* DIME IME for Windows 7/8/10/11
+
+BSD 3-Clause License
+
+Copyright (c) 2022, Jeremy Wu
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its
+   contributors may be used to endorse or promote products derived from
+   this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+*/
+
+#include <mutex>
+#include <sal.h> // Include SAL annotations
+#include "Globals.h"
+//#include <VersionHelpers.h> // Include VersionHelpers for IsWindows* macros
+#pragma warning(disable : 4996)
+
+std::mutex g_mutex;
+
+typedef _Return_type_success_(return >= 0) LONG NTSTATUS;
+#define STATUS_SUCCESS ((NTSTATUS)0x00000000)
+#define STATUS_REVISION_MISMATCH ((NTSTATUS)0xC0000059)
+typedef LONG(WINAPI* PFN_RtlVerifyVersionInfo)(OSVERSIONINFOEXW*, ULONG, ULONGLONG);
+
+
+// Global Windows version info
+namespace Global {
+    DWORD g_WinMajorVersion = 0;
+    DWORD g_WinMinorVersion = 0;
+    DWORD g_WinBuildNumber = 0;
+}
+
+// Returns TRUE if current Windows version is at least (major, minor, build)
+BOOL IsWindowsVersionOrGreater(DWORD major, DWORD minor, DWORD build)
+{
+    // Get version info once and cache
+    static bool versionFetched = false;
+    if (!versionFetched) {
+        typedef NTSTATUS (WINAPI* RtlGetVersionFn)(PRTL_OSVERSIONINFOW);
+        HMODULE hNtdll = GetModuleHandleW(L"ntdll.dll");
+        if (hNtdll) {
+            auto pFn = reinterpret_cast<RtlGetVersionFn>(
+                GetProcAddress(hNtdll, "RtlGetVersion")
+            );
+            RTL_OSVERSIONINFOW osvi = { sizeof(osvi) };
+            if (pFn && pFn(&osvi) == 0) {
+                Global::g_WinMajorVersion = osvi.dwMajorVersion;
+                Global::g_WinMinorVersion = osvi.dwMinorVersion;
+                Global::g_WinBuildNumber = osvi.dwBuildNumber;
+            }
+        }
+        versionFetched = true;
+    }
+    if (Global::g_WinMajorVersion > major) return TRUE;
+    if (Global::g_WinMajorVersion < major) return FALSE;
+    if (Global::g_WinMinorVersion > minor) return TRUE;
+    if (Global::g_WinMinorVersion < minor) return FALSE;
+    if (Global::g_WinBuildNumber >= build) return TRUE;
+    return FALSE;
+}
+
+//+---------------------------------------------------------------------------
+//
+// DllMain
+//
+//----------------------------------------------------------------------------
+
+BOOL WINAPI DllMain(HINSTANCE hInstance, DWORD dwReason, LPVOID pvReserved)
+{
+    // Mark pvReserved as unreferenced to suppress the warning
+    (void)pvReserved;
+
+    switch (dwReason)
+    {
+    case DLL_PROCESS_ATTACH:
+        __try
+        {
+            debugPrint(L"DllMain() DLL_PROCESS_ATTACH");
+            Global::dllInstanceHandle = hInstance;
+
+            if (!InitializeCriticalSectionAndSpinCount(&Global::CS, 0))
+            {
+                return FALSE;
+            }
+
+            if (!Global::RegisterWindowClass()) {
+                return FALSE;
+            }
+
+            // Check Windows version using IsWindows* macros
+            if (IsWindowsVersionOrGreater(8,0))
+            { // Windows 8 or greater
+                Global::isWindows8 = TRUE;
+            }
+            if (IsWindowsVersionOrGreater(10, 0, 17763))
+            { // Windows 10 1809 (build 17763) or later: dark theme APIs available
+                Global::isWindows1809OrLater = TRUE;
+            }
+            if (IsWindowsVersionOrGreater(8,1))
+            { // Windows 8.1 or greater. Load Shcore.dll for DPI-aware font size adjustment
+                Global::hShcore = LoadLibrary(L"Shcore.dll");
+                _T_GetDpiForMonitor getDpiForMonitor = nullptr;
+                if (Global::hShcore)
+                    getDpiForMonitor = reinterpret_cast<_T_GetDpiForMonitor>(GetProcAddress(Global::hShcore, "GetDpiForMonitor"));
+                if (getDpiForMonitor)
+                    CConfig::SetGetDpiForMonitor(getDpiForMonitor);
+                else
+                    debugPrint(L"DllMain() Failed to cast function GetDpiForMonitor in Shcore.dll");
+            }
+            { // Win10 1607+: per-monitor DPI-aware system metrics and thread DPI context
+                HMODULE hUser32 = GetModuleHandle(L"User32.dll");
+                if (hUser32)
+                {
+                    auto getMetricsForDpi = reinterpret_cast<_T_GetSystemMetricsForDpi>(
+                        GetProcAddress(hUser32, "GetSystemMetricsForDpi"));
+                    if (getMetricsForDpi)
+                        CConfig::SetGetSystemMetricsForDpi(getMetricsForDpi);
+
+                    auto setThreadDpiCtx = reinterpret_cast<_T_SetThreadDpiAwarenessContext>(
+                        GetProcAddress(hUser32, "SetThreadDpiAwarenessContext"));
+                    if (setThreadDpiCtx)
+                        CConfig::SetSetThreadDpiAwarenessContext(setThreadDpiCtx);
+                }
+            }
+
+            // Load global resource strings
+            LoadString(Global::dllInstanceHandle, IDS_IME_MODE, Global::ImeModeDescription, 50);
+            LoadString(Global::dllInstanceHandle, IDS_DOUBLE_SINGLE_BYTE, Global::DoubleSingleByteDescription, 50);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            // L-03: SEH protection in DllMain
+            // If exception occurs during initialization, fail gracefully
+            debugPrint(L"DllMain() Exception caught during DLL_PROCESS_ATTACH: 0x%08X", GetExceptionCode());
+            return FALSE;
+        }
+        break;
+
+    case DLL_PROCESS_DETACH:
+        __try
+        {
+            debugPrint(L"DllMain() DLL_PROCESS_DETACH");
+
+            if (Global::hShcore)
+            {
+                FreeLibrary(Global::hShcore);
+                Global::hShcore = nullptr; // Set to nullptr after freeing
+            }
+
+            DeleteCriticalSection(&Global::CS);
+
+#ifdef _DEBUG
+            // Report memory leaks at process detach, after other cleanup
+            _CrtDumpMemoryLeaks();
+#endif
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            // L-03: SEH protection in DllMain
+            // If exception occurs during cleanup, log it but don't crash the process
+            // Process is terminating anyway, so we can't do much else
+            debugPrint(L"DllMain() Exception caught during DLL_PROCESS_DETACH: 0x%08X", GetExceptionCode());
+        }
+        break;
+
+    case DLL_THREAD_ATTACH:
+        debugPrint(L"DllMain() DLL_THREAD_ATTACH");
+        break;
+
+    case DLL_THREAD_DETACH:
+        debugPrint(L"DllMain() DLL_THREAD_DETACH");
+        break;
+    }
+
+    return TRUE;
+}

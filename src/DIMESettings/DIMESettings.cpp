@@ -1,0 +1,666 @@
+﻿// DIME Settings.cpp : Defines the entry point for the application.
+//
+
+#include "framework.h"
+#include <CommCtrl.h>
+#include <ntddkbd.h>
+#include "DIMESettings.h"
+#include "..\Globals.h"
+#include "..\CompositionProcessorEngine.h"
+#include "..\Config.h"
+#include "..\BuildInfo.h"
+#include "..\TfInputProcessorProfile.h"
+#include "SettingsWindow.h"
+
+#include <io.h>      // _open_osfhandle, _dup2, _fileno
+#include <fcntl.h>   // _O_WRONLY, _O_TEXT
+#include <dwmapi.h>
+#include <uxtheme.h>
+#pragma comment(lib, "dwmapi.lib")
+#pragma comment(lib, "uxtheme.lib")
+
+#ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
+#define DWMWA_USE_IMMERSIVE_DARK_MODE 20
+#endif
+
+// Theme state for main launcher
+static bool   s_isDarkTheme  = false;
+static HBRUSH s_hBrushDlgBg  = nullptr;
+static HBRUSH s_hBrushControlBg = nullptr;
+// Set while showIMESettings is active to suppress re-applying theme during
+// WM_THEMECHANGED broadcasts triggered by SetWindowTheme on property-sheet controls.
+static bool   s_suppressThemeReapply = false;
+
+// Calls uxtheme ordinal 135 SetPreferredAppMode:
+//   1 = AllowDark  (dark mode enabled for windows that opt in)
+//   3 = ForceLight (locks the entire process to light mode; DWM ignores AllowDarkModeForWindow)
+// Must be called before any window is created and whenever the system theme changes.
+#define WM_REASSERT_TITLEBAR (WM_APP + 1)
+static void SetAppPreferredMode(int mode)
+{
+    typedef void (WINAPI* FnSetPreferredAppMode)(int);
+    HMODULE hUxtheme = GetModuleHandleW(L"uxtheme.dll");
+    if (hUxtheme) {
+        auto pFn = reinterpret_cast<FnSetPreferredAppMode>(
+            GetProcAddress(hUxtheme, MAKEINTRESOURCEA(135))
+        );
+        if (pFn) pFn(mode);
+    }
+}
+
+#pragma comment(lib, "ComCtl32.lib")
+// Enable ComCtl32 v6 (visual styles, TaskDialogIndirect support)
+#pragma comment(linker, "\"/manifestdependency:type='win32' \
+name='Microsoft.Windows.Common-Controls' version='6.0.0.0' \
+processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
+#include <commctrl.h>  
+constexpr wchar_t DIME_SETTINGS_INSTANCE_MUTEX_NAME[] = L"{B11F1FB2-3ECC-409E-A036-4162ADCEF1A3}";
+
+// Global Variables:
+HINSTANCE hInst;                                // current instance
+
+
+typedef _Return_type_success_(return >= 0) LONG NTSTATUS;
+#define STATUS_SUCCESS ((NTSTATUS)0x00000000)
+#define STATUS_REVISION_MISMATCH ((NTSTATUS)0xC0000059)
+typedef LONG(WINAPI* PFN_RtlVerifyVersionInfo)(OSVERSIONINFOEXW*, ULONG, ULONGLONG);
+
+// Global Windows version info for DIMESettings
+namespace Global {
+    DWORD g_WinMajorVersion = 0;
+    DWORD g_WinMinorVersion = 0;
+    DWORD g_WinBuildNumber = 0;
+}
+
+// Returns TRUE if current Windows version is at least (major, minor, build)
+BOOL IsWindowsVersionOrGreater(DWORD major, DWORD minor, DWORD build)
+{
+    // Get version info once and cache
+    static bool versionFetched = false;
+    if (!versionFetched) {
+        typedef NTSTATUS (WINAPI* RtlGetVersionFn)(PRTL_OSVERSIONINFOW);
+        HMODULE hNtdll = GetModuleHandleW(L"ntdll.dll");
+        if (hNtdll) {
+            auto pFn = reinterpret_cast<RtlGetVersionFn>(
+                GetProcAddress(hNtdll, "RtlGetVersion")
+            );
+            RTL_OSVERSIONINFOW osvi = { sizeof(osvi) };
+            if (pFn && pFn(&osvi) == 0) {
+                Global::g_WinMajorVersion = osvi.dwMajorVersion;
+                Global::g_WinMinorVersion = osvi.dwMinorVersion;
+                Global::g_WinBuildNumber = osvi.dwBuildNumber;
+            }
+        }
+        versionFetched = true;
+    }
+    if (Global::g_WinMajorVersion > major) return TRUE;
+    if (Global::g_WinMajorVersion < major) return FALSE;
+    if (Global::g_WinMinorVersion > minor) return TRUE;
+    if (Global::g_WinMinorVersion < minor) return FALSE;
+    if (Global::g_WinBuildNumber >= build) return TRUE;
+    return FALSE;
+}
+
+enum _PROCESS_DPI_AWARENESS
+{
+    Process_DPI_Unaware = 0,
+    Process_System_DPI_Aware = 1,
+    Process_Per_Monitor_DPI_Aware = 2
+};
+
+
+INT_PTR CALLBACK    WndProc(HWND, UINT, WPARAM, LPARAM);
+
+int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
+                     _In_opt_ HINSTANCE hPrevInstance,
+                     _In_ LPWSTR    lpCmdLine,
+                     _In_ int       nCmdShow)
+{
+    UNREFERENCED_PARAMETER(hPrevInstance);
+
+    // Initialize Windows version flags (same as DllMain.cpp)
+    if (IsWindowsVersionOrGreater(10, 0, 17763))
+        Global::isWindows1809OrLater = TRUE;
+
+    // Check for --mode (GUI launch to specific IME mode) vs --legacy vs CLI commands
+    bool useLegacyUI = false;
+    bool useNewUI = false;
+    IME_MODE guiMode = IME_MODE::IME_MODE_DAYI;
+    if (lpCmdLine && lpCmdLine[0] != L'\0')
+    {
+        // Parse --legacy flag
+        if (wcsstr(lpCmdLine, L"--legacy")) {
+            useLegacyUI = true;
+        }
+        // Parse --reset-ui flag (reset window placement, not a CLI command — launches GUI)
+        if (wcsstr(lpCmdLine, L"--reset-ui")) {
+            HKEY hKey;
+            if (RegOpenKeyExW(HKEY_CURRENT_USER, L"SOFTWARE\\DIME\\SettingsUI", 0, KEY_WRITE, &hKey) == ERROR_SUCCESS) {
+                RegDeleteValueW(hKey, L"WindowPlacement");
+                RegCloseKey(hKey);
+            }
+            useNewUI = true; // treat as GUI launch, not CLI
+        }
+        // Parse --mode for GUI launch (only if no CLI commands present)
+        const wchar_t* modeArg = wcsstr(lpCmdLine, L"--mode ");
+        // Note: --reset-ui must not match --reset (CLI command). Check for --reset NOT followed by -
+        bool hasResetCmd = false;
+        { const wchar_t* r = wcsstr(lpCmdLine, L"--reset");
+          if (r && r[7] != L'-') hasResetCmd = true; }
+        bool hasCLICommand = wcsstr(lpCmdLine, L"--get") || wcsstr(lpCmdLine, L"--set") ||
+            hasResetCmd || wcsstr(lpCmdLine, L"--import") ||
+            wcsstr(lpCmdLine, L"--export") || wcsstr(lpCmdLine, L"--load") ||
+            wcsstr(lpCmdLine, L"--list") || wcsstr(lpCmdLine, L"--help");
+        if (modeArg && !hasCLICommand && !useLegacyUI) {
+            modeArg += 7; // skip "--mode "
+            wchar_t modeName[32] = {};
+            int j = 0;
+            while (modeArg[j] && modeArg[j] != L' ' && j < 31) {
+                modeName[j] = modeArg[j]; j++;
+            }
+            IME_MODE parsed = SettingsModel::StringToImeMode(modeName);
+            if (parsed != IME_MODE::IME_MODE_NONE) {
+                guiMode = parsed;
+                useNewUI = true;
+            }
+        }
+    }
+
+    // CLI mode: if arguments are present and not a GUI launch, run headless.
+    if (lpCmdLine && lpCmdLine[0] != L'\0' && !useNewUI && !useLegacyUI)
+    {
+        // Check if the parent already redirected our stdout (pipe from
+        // FOR /F, | pipe, or > file).  GUI-subsystem apps receive inherited
+        // handles when the parent sets STARTF_USESTDHANDLES.
+        HANDLE hStdOut = GetStdHandle(STD_OUTPUT_HANDLE);
+        bool outputRedirected = (hStdOut != NULL && hStdOut != INVALID_HANDLE_VALUE);
+
+        if (outputRedirected)
+        {
+            // Stdout is a pipe or file — wire up C runtime streams to the
+            // inherited handles so fwprintf(stdout, ...) writes to the pipe.
+            int fd = _open_osfhandle((intptr_t)hStdOut, _O_WRONLY | _O_TEXT);
+            if (fd >= 0)
+                _dup2(fd, _fileno(stdout));
+            HANDLE hStdErr = GetStdHandle(STD_ERROR_HANDLE);
+            if (hStdErr && hStdErr != INVALID_HANDLE_VALUE)
+            {
+                int efd = _open_osfhandle((intptr_t)hStdErr, _O_WRONLY | _O_TEXT);
+                if (efd >= 0)
+                    _dup2(efd, _fileno(stderr));
+            }
+            int rc = RunCLI(lpCmdLine);
+            fflush(stdout);
+            fflush(stderr);
+            return rc;
+        }
+
+        // Interactive case: attach to the parent console (e.g. cmd.exe) so
+        // output reaches the terminal.  If there is no parent console (e.g.
+        // launched from a shortcut), allocate one.
+        bool attachedExisting = AttachConsole(ATTACH_PARENT_PROCESS) != FALSE;
+        if (!attachedExisting)
+            AllocConsole();
+        FILE* fp = nullptr;
+        freopen_s(&fp, "CONOUT$", "w", stdout);
+        freopen_s(&fp, "CONOUT$", "w", stderr);
+        // When attaching to an existing console the parent shell (PowerShell /
+        // cmd) has already printed its next prompt because GUI-subsystem apps
+        // are launched asynchronously.  Overwrite that prompt line: move the
+        // cursor to column 0, blank out the line, so our output starts clean.
+        if (attachedExisting)
+        {
+            HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+            CONSOLE_SCREEN_BUFFER_INFO csbi;
+            if (GetConsoleScreenBufferInfo(hOut, &csbi))
+            {
+                COORD lineStart = { 0, csbi.dwCursorPosition.Y };
+                DWORD filled = 0;
+                FillConsoleOutputCharacterW(hOut, L' ', csbi.dwSize.X, lineStart, &filled);
+                SetConsoleCursorPosition(hOut, lineStart);
+            }
+        }
+        int rc = RunCLI(lpCmdLine);
+        fflush(stdout);
+        fflush(stderr);
+        // GUI-subsystem apps launched from a console shell run asynchronously:
+        // the shell prints its next prompt and re-enters ReadConsole before our
+        // process exits.  Injecting a silent Enter into the console input buffer
+        // unblocks the shell's ReadConsole call so the prompt reappears without
+        // the user having to press Enter manually.
+        if (attachedExisting)
+        {
+            HANDLE hStdIn = GetStdHandle(STD_INPUT_HANDLE);
+            DWORD  savedMode = 0;
+            GetConsoleMode(hStdIn, &savedMode);
+            SetConsoleMode(hStdIn, savedMode & ~ENABLE_ECHO_INPUT);
+            INPUT_RECORD ir[2] = {};
+            ir[0].EventType                        = KEY_EVENT;
+            ir[0].Event.KeyEvent.bKeyDown          = TRUE;
+            ir[0].Event.KeyEvent.wRepeatCount      = 1;
+            ir[0].Event.KeyEvent.wVirtualKeyCode   = VK_RETURN;
+            ir[0].Event.KeyEvent.uChar.UnicodeChar = L'\r';
+            ir[1]                                  = ir[0];
+            ir[1].Event.KeyEvent.bKeyDown          = FALSE;
+            DWORD written = 0;
+            WriteConsoleInputW(hStdIn, ir, 2, &written);
+            SetConsoleMode(hStdIn, savedMode);
+        }
+        FreeConsole();
+        return rc;
+    }
+
+    //Check single instance!
+    //Make sure at most one instance of the tool is running
+    HANDLE hMutexOneInstance(::CreateMutex(NULL, TRUE, DIME_SETTINGS_INSTANCE_MUTEX_NAME));
+    bool bAlreadyRunning((::GetLastError() == ERROR_ALREADY_EXISTS));
+    if (hMutexOneInstance == NULL || bAlreadyRunning)
+    {
+        if (hMutexOneInstance)
+        {
+            ::ReleaseMutex(hMutexOneInstance);
+            ::CloseHandle(hMutexOneInstance);
+        }
+        // Try new UI window first, then old dialog
+        HWND hExisting = FindWindowW(SETTINGS_WND_CLASS, nullptr);
+        if (!hExisting)
+            hExisting = FindWindowW(NULL, L"DIME設定");
+        if (hExisting) {
+            // Send mode info via WM_COPYDATA if we have --mode
+            if (useNewUI && lpCmdLine) {
+                COPYDATASTRUCT cds = {};
+                cds.dwData = WM_SETTINGS_SWITCH_MODE;
+                cds.cbData = (DWORD)(wcslen(lpCmdLine) + 1) * sizeof(WCHAR);
+                cds.lpData = (void*)lpCmdLine;
+                SendMessage(hExisting, WM_COPYDATA, 0, (LPARAM)&cds);
+            }
+            SetForegroundWindow(hExisting);
+        }
+        return -1;
+    }
+
+    // DPI awareness: tiered approach with runtime fallback
+    // Tier 1: Per-Monitor V2 (Win10 1703+) — automatic non-client/dialog/control scaling
+    // Tier 2: Per-Monitor V1 (Win8.1+) — requires manual WM_DPICHANGED handling
+    // Tier 3: System DPI Aware (Win8.1+) — correct on primary monitor only
+    // Tier 4: Win7 — no DPI awareness API, no-op
+    {
+        BOOL dpiSet = FALSE;
+        // Tier 1: SetProcessDpiAwarenessContext from User32.dll (Win10 1607+)
+        HMODULE hUser32 = GetModuleHandle(L"User32.dll");
+        if (hUser32) {
+            typedef BOOL (WINAPI *_T_SetProcessDpiAwarenessContext)(DPI_AWARENESS_CONTEXT);
+            auto SetDpiCtx = reinterpret_cast<_T_SetProcessDpiAwarenessContext>(
+                GetProcAddress(hUser32, "SetProcessDpiAwarenessContext"));
+            if (SetDpiCtx && SetDpiCtx(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)) {
+                debugPrint(L"DPI: Per-Monitor V2 awareness set");
+                dpiSet = TRUE;
+            }
+        }
+        // Tier 2/3: SetProcessDpiAwareness from Shcore.dll (Win8.1+)
+        if (!dpiSet && IsWindowsVersionOrGreater(8,1)) {
+            HMODULE hShcore = LoadLibrary(L"Shcore.dll");
+            if (hShcore != NULL) {
+                auto SetProcessDpiAwareness = reinterpret_cast<HRESULT(__stdcall*)(_PROCESS_DPI_AWARENESS)>(
+                    GetProcAddress(hShcore, "SetProcessDpiAwareness"));
+                if (SetProcessDpiAwareness != nullptr) {
+                    // Try Per-Monitor V1 first, fall back to System
+                    if (SUCCEEDED(SetProcessDpiAwareness(Process_Per_Monitor_DPI_Aware))) {
+                        debugPrint(L"DPI: Per-Monitor V1 awareness set");
+                    } else {
+                        SetProcessDpiAwareness(Process_System_DPI_Aware);
+                        debugPrint(L"DPI: System DPI awareness set");
+                    }
+                } else {
+                    debugPrint(L"Failed to cast function SetProcessDpiAwareness in Shcore.dll");
+                }
+                FreeLibrary(hShcore);
+            }
+        }
+    }
+
+    // Set preferred app mode BEFORE any window is created.
+    // ForceDark(2) makes ALL windows dark including MessageBox; AllowDark(1) only affects opt-in windows.
+    if (CConfig::IsSystemDarkTheme())
+        SetAppPreferredMode(2);
+
+    InitCommonControls();
+
+    // ====================================================================
+    // New UI: sidebar + card-based settings window
+    // Launch when: no args (default), or --mode <name> without CLI commands
+    // ====================================================================
+    if (!useLegacyUI) {
+        // Default to new UI
+        if (!useNewUI) {
+            // No --mode specified, default to Dayi
+            guiMode = IME_MODE::IME_MODE_DAYI;
+        }
+        // Initialize COM for TSF profile enumeration
+        CoInitialize(nullptr);
+        // Enumerate reverse conversion providers (exact copy from legacy path)
+        {
+            CTfInputProcessorProfile* profile = new CTfInputProcessorProfile();
+            LANGID langid = 1028;  // CHT Language ID
+            if (SUCCEEDED(profile->CreateInstance())) {
+                if (langid == 0)
+                    profile->GetCurrentLanguage(&langid);
+                CDIMEArray<LanguageProfileInfo> langProfileInfoList;
+                profile->GetReverseConversionProviders(langid, &langProfileInfoList);
+                CConfig::SetReverseConvervsionInfoList(&langProfileInfoList);
+            }
+            delete profile;
+        }
+        // Load config so reverse conversion selection is read
+        CConfig::LoadConfig(guiMode);
+        int result = SettingsWindow::Run(hInstance, nCmdShow, guiMode);
+        if (hMutexOneInstance) {
+            ::ReleaseMutex(hMutexOneInstance);
+            ::CloseHandle(hMutexOneInstance);
+        }
+        return result;
+    }
+
+    // ====================================================================
+    // Legacy UI: old launcher dialog + PropertySheet (--legacy flag)
+    // ====================================================================
+    HWND hDlg;
+    MSG msg;
+    BOOL ret;
+
+    hDlg = CreateDialogParam(hInst, MAKEINTRESOURCE(IDD_DIMESETTINGS), 0, WndProc, 0);
+    ShowWindow(hDlg, nCmdShow);
+
+    while ((ret = GetMessage(&msg, 0, 0, 0)) != 0) {
+        if (ret == -1)
+            return -1;
+
+        if (!IsDialogMessage(hDlg, &msg)) {
+            TranslateMessage(&msg);
+            DispatchMessage(&msg);
+        }
+    }
+
+    return 0;
+
+}
+
+static void ReassertTitleBarTheme(HWND hDlg)
+{
+    // In light mode, call NO dark-mode APIs — Windows defaults to light
+    // naturally. Calling DwmSetWindowAttribute/AllowDarkModeForWindow even
+    // with FALSE values primes uxtheme to track this window, and subsequent
+    // WM_THEMECHANGED broadcasts from SetWindowTheme can then flip the title
+    // bar dark. The default (no API calls) is always correct for light mode.
+    if (!s_isDarkTheme) return;
+    BOOL useDark = TRUE;
+    DwmSetWindowAttribute(hDlg, DWMWA_USE_IMMERSIVE_DARK_MODE, &useDark, sizeof(BOOL));
+    typedef BOOL (WINAPI* FnAllowDarkModeForWindow)(HWND, BOOL);
+    HMODULE hUxtheme = GetModuleHandleW(L"uxtheme.dll");
+    if (hUxtheme) {
+        auto pFn = reinterpret_cast<FnAllowDarkModeForWindow>(
+            GetProcAddress(hUxtheme, MAKEINTRESOURCEA(133))
+        );
+        if (pFn) pFn(hDlg, TRUE);
+    }
+    SetWindowPos(hDlg, nullptr, 0, 0, 0, 0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+}
+
+static void showIMESettings(HWND hDlg, IME_MODE imeMode)
+{
+    PROPSHEETPAGE psp;
+    PROPSHEETHEADER psh;
+    struct {
+        int id;
+        DLGPROC DlgProc;
+    } DlgPage[] = {
+        { IDD_DIALOG_COMMON, CConfig::CommonPropertyPageWndProc },
+        { IDD_DIALOG_DICTIONARY, CConfig::DictionaryPropertyPageWndProc }
+
+    };
+    HPROPSHEETPAGE hpsp[_countof(DlgPage)] = { nullptr }; // Initialize all elements to nullptr
+    int i;
+
+    ZeroMemory(&psp, sizeof(PROPSHEETPAGE));
+    psp.dwSize = sizeof(PROPSHEETPAGE);
+    psp.dwFlags = PSP_PREMATURE;
+    psp.hInstance = hInst;
+
+    for (i = 0; i < _countof(DlgPage); i++)
+    {
+        psp.pszTemplate = MAKEINTRESOURCE(DlgPage[i].id);
+        psp.pfnDlgProc = DlgPage[i].DlgProc;
+		// Create an owned DialogContext with its own temporary engine for settings UI.
+		DialogContext* pCtx = new (std::nothrow) DialogContext();
+		if (pCtx) {
+			// Construct a temporary composition engine for the settings dialog
+			// so the UI uses the same validation logic as the runtime IME.
+			pCtx->imeMode = imeMode;
+			// Set maxCodes based on IME mode (phonetic uses longer keys)
+			pCtx->maxCodes = (imeMode == IME_MODE::IME_MODE_PHONETIC) ? MAX_KEY_LENGTH : CConfig::GetMaxCodes();
+			pCtx->pEngine = new (std::nothrow) CCompositionProcessorEngine(nullptr);
+			pCtx->engineOwned = true;
+			if (pCtx->pEngine) {
+				pCtx->pEngine->SetupDictionaryFile(imeMode);
+				pCtx->pEngine->SetupConfiguration(imeMode);
+				pCtx->pEngine->SetupKeystroke(imeMode);
+			}
+			psp.lParam = (LPARAM)pCtx;
+		} else {
+			psp.lParam = 0;
+		}
+        if (CreatePropertySheetPageW != nullptr) // Ensure the function pointer is valid
+        {
+            hpsp[i] = CreatePropertySheetPageW(&psp); // Call the function with the required argument
+        }
+        if (!hpsp[i] && pCtx) {
+            // cleanup if page creation failed
+            if (pCtx->engineOwned && pCtx->pEngine) delete pCtx->pEngine;
+            delete pCtx;
+        }
+    }
+
+    ZeroMemory(&psh, sizeof(PROPSHEETHEADER));
+    psh.dwSize = sizeof(PROPSHEETHEADER);
+    psh.dwFlags = PSH_DEFAULT | PSH_NOCONTEXTHELP | PSH_USECALLBACK;
+    psh.pfnCallback = CConfig::PropSheetCallback;
+    psh.hInstance = hInst;
+    psh.hwndParent = hDlg;
+    psh.nPages = _countof(DlgPage);
+    psh.phpage = hpsp;
+    psh.pszCaption = L"DIME User Settings";
+
+    WCHAR dialogCaption[MAX_PATH] = { 0 };
+
+    CTfInputProcessorProfile* profile = new CTfInputProcessorProfile();
+    LANGID langid = 1028;  //CHT Language ID.
+    GUID guidProfile;
+
+    if (imeMode == IME_MODE::IME_MODE_DAYI)
+    {
+        guidProfile = Global::DIMEDayiGuidProfile;
+        StringCchCat(dialogCaption, MAX_PATH, L"DIME 大易輸入法設定");
+    }
+    else if (imeMode == IME_MODE::IME_MODE_ARRAY)
+    {
+        guidProfile = Global::DIMEArrayGuidProfile;
+        StringCchCat(dialogCaption, MAX_PATH, L"DIME 行列輸入法設定");
+    }
+    else if (imeMode == IME_MODE::IME_MODE_GENERIC)
+    {
+        guidProfile = Global::DIMEGenericGuidProfile;
+        StringCchCat(dialogCaption, MAX_PATH, L"DIME 自建輸入法設定");
+    }
+    else if (imeMode == IME_MODE::IME_MODE_PHONETIC)
+    {
+        guidProfile = Global::DIMEPhoneticGuidProfile;
+        StringCchCat(dialogCaption, MAX_PATH, L"DIME 傳統注音輸入法設定");
+    }
+    // Reload reverse conversion list from system.
+    CConfig::EnumerateReverseConversionProviders(langid);
+    if (SUCCEEDED(profile->CreateInstance()))
+    {
+        if(langid == 0)
+            profile->GetCurrentLanguage(&langid);
+
+        if (guidProfile == GUID_NULL)
+        {
+            CLSID clsid;
+            profile->GetDefaultLanguageProfile(langid, GUID_TFCAT_TIP_KEYBOARD, &clsid, &guidProfile);
+        }
+    }
+    // Load config file and set imeMode (will filtered out self from reverse conversion list)
+    CConfig::LoadConfig(imeMode);
+    // Show version on caption of IME settings dialog
+    StringCchPrintf(dialogCaption, MAX_PATH, L"%s v%d.%d.%d.%d", dialogCaption,
+        BUILD_VER_MAJOR, BUILD_VER_MINOR, BUILD_COMMIT_COUNT, BUILD_DATE_1);
+    psh.pszCaption = dialogCaption;
+
+    // Load Rich Edit control library (must be loaded before dialog creation)
+    HINSTANCE dllRichEditHandle = LoadLibrary(L"msftedit.dll");
+
+    PropertySheetW(&psh);
+    if (dllRichEditHandle)
+        FreeLibrary(dllRichEditHandle);
+    // PropertySheetW is blocking. When it returns, queued WM_THEMECHANGED / WM_NCACTIVATE
+    // messages from property-sheet teardown may still be pending in the queue.
+    // Post a deferred message so ReassertTitleBarTheme runs AFTER all those are drained.
+    PostMessage(hDlg, WM_REASSERT_TITLEBAR, 0, 0);
+}
+
+// Message handler for about box.
+INT_PTR CALLBACK WndProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    UNREFERENCED_PARAMETER(lParam);
+    switch (message)
+    {
+    case WM_INITDIALOG:
+        s_isDarkTheme = CConfig::IsSystemDarkTheme();
+        if (s_isDarkTheme) {
+            s_hBrushDlgBg    = CreateSolidBrush(DARK_DIALOG_BG);
+            s_hBrushControlBg = CreateSolidBrush(DARK_CONTROL_BG);
+        }
+        // Apply dark/light theme to child controls first; SetWindowTheme() inside broadcasts
+        // WM_THEMECHANGED which can trigger DWM to re-read dark-mode state — so we set the
+        // DWM title-bar attribute AFTER all child theming is complete.
+        s_suppressThemeReapply = true;
+        CConfig::ApplyDialogDarkTheme(hDlg, s_isDarkTheme);
+        s_suppressThemeReapply = false;
+        ReassertTitleBarTheme(hDlg);
+        return (INT_PTR)TRUE;
+
+    case WM_CTLCOLORDLG:
+        if (s_isDarkTheme && s_hBrushDlgBg)
+        {
+            SetBkColor((HDC)wParam, DARK_DIALOG_BG);
+            return (INT_PTR)s_hBrushDlgBg;
+        }
+        break;
+
+    case WM_CTLCOLORSTATIC:
+        if (s_isDarkTheme && s_hBrushDlgBg)
+        {
+            SetTextColor((HDC)wParam, DARK_TEXT);
+            SetBkColor((HDC)wParam, DARK_DIALOG_BG);
+            return (INT_PTR)s_hBrushDlgBg;
+        }
+        break;
+
+    case WM_CTLCOLORBTN:
+        if (s_isDarkTheme && s_hBrushControlBg)
+        {
+            SetTextColor((HDC)wParam, DARK_TEXT);
+            SetBkColor((HDC)wParam, DARK_CONTROL_BG);
+            SetBkMode((HDC)wParam, OPAQUE);
+            return (INT_PTR)s_hBrushControlBg;
+        }
+        break;
+
+    case WM_DRAWITEM:
+        {
+            LPDRAWITEMSTRUCT pdis = (LPDRAWITEMSTRUCT)lParam;
+            if (pdis && pdis->CtlType == ODT_BUTTON && s_isDarkTheme)
+            {
+                CConfig::DrawDarkButton(pdis);
+                return (INT_PTR)TRUE;
+            }
+        }
+        break;
+
+    case WM_NCACTIVATE:
+        // Only reassert in dark mode. In light mode, touching dark-mode APIs here
+        // primes uxtheme and causes the title bar to flip on WM_THEMECHANGED storms.
+        if (s_isDarkTheme)
+            ReassertTitleBarTheme(hDlg);
+        break;
+
+    case WM_THEMECHANGED:
+        if (s_suppressThemeReapply) {
+            ReassertTitleBarTheme(hDlg); // no-op in light mode
+            break;
+        }
+        s_isDarkTheme = CConfig::IsSystemDarkTheme();
+        // Update process-wide mode only when switching to dark.
+        // In light mode, calling SetAppPreferredMode triggers uxtheme tracking
+        // that can flip the title bar on subsequent WM_THEMECHANGED storms.
+        if (s_isDarkTheme)
+            SetAppPreferredMode(2);
+        if (s_hBrushDlgBg) { DeleteObject(s_hBrushDlgBg); s_hBrushDlgBg = nullptr; }
+        if (s_hBrushControlBg) { DeleteObject(s_hBrushControlBg); s_hBrushControlBg = nullptr; }
+        if (s_isDarkTheme) {
+            s_hBrushDlgBg    = CreateSolidBrush(DARK_DIALOG_BG);
+            s_hBrushControlBg = CreateSolidBrush(DARK_CONTROL_BG);
+        }
+        s_suppressThemeReapply = true;
+        CConfig::ApplyDialogDarkTheme(hDlg, s_isDarkTheme);
+        s_suppressThemeReapply = false;
+        ReassertTitleBarTheme(hDlg); // no-op in light mode
+        InvalidateRect(hDlg, NULL, TRUE);
+        break;
+
+    case WM_REASSERT_TITLEBAR:
+        // Deferred re-assertion posted after PropertySheetW returns so we run
+        // after all teardown broadcasts have been fully processed by the message loop.
+        ReassertTitleBarTheme(hDlg);
+        return (INT_PTR)TRUE;
+
+    case WM_COMMAND:
+        switch (LOWORD(wParam))
+        {
+        case IDB_DIME_DAYI_SETTINGS:
+            showIMESettings(hDlg, IME_MODE::IME_MODE_DAYI);
+            break;
+        case IDB_DIME_ARRAY_SETTINGS:
+            showIMESettings(hDlg, IME_MODE::IME_MODE_ARRAY);
+            break;
+        case IDB_DIME_PHONETIC_SETTINGS:
+            showIMESettings(hDlg, IME_MODE::IME_MODE_PHONETIC);
+            break;
+        case IDB_DIME_GENERIC_SETTINGS:
+            showIMESettings(hDlg, IME_MODE::IME_MODE_GENERIC);
+            break;
+        case IDOK:
+        case IDCANCEL:
+            EndDialog(hDlg, LOWORD(wParam));
+            return (INT_PTR)TRUE;
+        default:
+			break;
+		}
+        break;
+
+    case WM_CLOSE:
+        DestroyWindow(hDlg);
+        return (INT_PTR)TRUE;
+
+    case WM_DESTROY:
+        if (s_hBrushDlgBg) { DeleteObject(s_hBrushDlgBg); s_hBrushDlgBg = nullptr; }
+        if (s_hBrushControlBg) { DeleteObject(s_hBrushControlBg); s_hBrushControlBg = nullptr; }
+        PostQuitMessage(0);
+        return (INT_PTR)TRUE;
+
+    default:
+        break;
+    }
+    return (INT_PTR)FALSE;
+}
