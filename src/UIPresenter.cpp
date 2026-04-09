@@ -1508,7 +1508,9 @@ void CUIPresenter::ShowNotifyText(_In_ CStringRange* pNotifyText, _In_opt_ UINT 
 			{
 				pView->GetWnd(&parentWndHandle);
 				debugPrint(L" parentWndHandle = %x , FocusHwnd = %x, ActiveHwnd =%x, ForeGroundHWnd = %x", parentWndHandle, GetFocus(), GetActiveWindow(), GetForegroundWindow());
-				
+				// Ensure font matches current monitor's DPI before sizing/showing notify window
+				if (Global::isWindows8 && parentWndHandle) CConfig::SetDefaultTextFont(parentWndHandle);
+
 				// Use stack allocation instead of heap allocation to avoid memory leaks
 				GUITHREADINFO guiInfo = {0};
 				guiInfo.cbSize = sizeof(GUITHREADINFO);

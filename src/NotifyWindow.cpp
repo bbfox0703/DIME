@@ -450,15 +450,24 @@ LRESULT CALLBACK CNotifyWindow::_WindowProcCallback(_In_ HWND wndHandle, UINT uM
     case WM_DPICHANGED:
     {
         CConfig::SetDefaultTextFont(wndHandle);
-        RECT* prcNew = reinterpret_cast<RECT*>(lParam);
-        if (prcNew)
+        // Remeasure text with the new DPI-scaled font and resize window accordingly.
+        // Do NOT use the Windows-suggested rect (lParam) because Windows doesn't know
+        // our text-based sizing — it just scales the old rect, which is inaccurate.
+        HDC dcHandle = GetDC(wndHandle);
+        if (dcHandle)
         {
-            SetWindowPos(wndHandle, NULL,
-                prcNew->left, prcNew->top,
-                prcNew->right - prcNew->left,
-                prcNew->bottom - prcNew->top,
-                SWP_NOZORDER | SWP_NOACTIVATE);
+            HFONT hFontOld = (HFONT)SelectObject(dcHandle, Global::defaultlFontHandle);
+            if (_notifyText.GetLength())
+            {
+                SIZE size;
+                GetTextExtentPoint32(dcHandle, _notifyText.Get(), (UINT)_notifyText.GetLength(), &size);
+                _cxTitle = size.cx + size.cx / (int)_notifyText.GetLength();
+                _cyTitle = size.cy * 3 / 2;
+            }
+            SelectObject(dcHandle, hFontOld);
+            ReleaseDC(wndHandle, dcHandle);
         }
+        _ResizeWindow();
         return 0;
     }
     }
