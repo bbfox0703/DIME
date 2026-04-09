@@ -745,8 +745,8 @@ void CCandidateWindow::_OnPaint(_In_ HDC dcHandle, _In_ PAINTSTRUCT *pPaintStruc
 
     _AdjustPageIndex(currentPage, currentPageIndex);
 
-    _DrawList(dcHandle, currentPageIndex, &pPaintStruct->rcPaint);
-    _DrawPageIndicator(dcHandle, currentPage, &pPaintStruct->rcPaint);
+    _DrawList(memDC, currentPageIndex, &memRect);
+    _DrawPageIndicator(memDC, currentPage, &memRect);
 
 	// 原子性地將記憶體 DC 內容複製到螢幕 DC
 	// 這是唯一會顯示在螢幕上的操作，確保無撕裂
