@@ -74,6 +74,7 @@ CUIPresenter::CUIPresenter(_In_ CDIME *pTextService, CCompositionProcessorEngine
     _candLocation = { UI::DEFAULT_WINDOW_X, UI::DEFAULT_WINDOW_Y };
     _notifyLocation = { UI::DEFAULT_WINDOW_X, UI::DEFAULT_WINDOW_Y };
     _rectCompRange = { UI::DEFAULT_WINDOW_X, UI::DEFAULT_WINDOW_Y, UI::DEFAULT_WINDOW_X, UI::DEFAULT_WINDOW_Y };
+    _skipCandReposition = FALSE;
     _inFocus = FALSE;
 }
 
@@ -921,8 +922,16 @@ VOID CUIPresenter::_LayoutChangeNotification(_In_ RECT *lpRect, BOOL firstCall)
 	}
 	if (_pCandidateWnd && lpRect)
 	{
-
-		if (lpRect->bottom - lpRect->top >=0  || lpRect->right - lpRect->left >=0 ) // confirm the extent rect is valid.
+		// Skip repositioning when showing associated phrase candidates.
+		// The space composition triggers OnLayoutChange asynchronously with stale
+		// _pRangeComposition, causing the window to jump to wrong coordinates.
+		// The candidate window is already at the correct position from the prior selection.
+		if (_skipCandReposition)
+		{
+			debugPrint(L"_LayoutChangeNotification: skipping reposition (phrase mode)");
+			_skipCandReposition = FALSE;
+		}
+		else if (lpRect->bottom - lpRect->top >=0  || lpRect->right - lpRect->left >=0 ) // confirm the extent rect is valid.
 		{
 			_pCandidateWnd->_GetClientRect(&candRect);
 			if (((compRect.right - compRect.left) > (candRect.right - candRect.left)) && caretPt.x < compRect.right && caretPt.x >= compRect.left)

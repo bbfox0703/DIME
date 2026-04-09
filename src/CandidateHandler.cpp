@@ -223,12 +223,12 @@ HRESULT CDIME::_HandleCandidateWorker(TfEditCookie ec, _In_ ITfContext *pContext
 			_candidateMode = CANDIDATE_MODE::CANDIDATE_PHRASE;
 			_isCandidateWithWildcard = FALSE;
 
-			// Save current candidate window position before starting a new composition.
-			// The space composition triggers OnLayoutChange which may reposition the window
-			// using a stale _pRangeComposition (from the old composition that just ended),
-			// causing the window to jump to a wrong location on multi-monitor setups.
-			POINT savedCandPt = { 0, 0 };
-			_pUIPresenter->GetCandLocation(&savedCandPt);
+			// Tell UIPresenter to skip the next candidate reposition.
+			// The space composition below triggers OnLayoutChange asynchronously with a stale
+			// _pRangeComposition, causing the window to jump to wrong coordinates (especially
+			// on multi-monitor setups or in apps like Notepad++). The candidate window is
+			// already at the correct position from the prior candidate selection.
+			_pUIPresenter->_skipCandReposition = TRUE;
 
 			//StartCandidateList require a valid selection from a valid pComposition to determine the location to show the candidate window
 			//Moved after setCandidateText or candidatePhraseList can be corrupt after probe composition.
@@ -236,12 +236,6 @@ HRESULT CDIME::_HandleCandidateWorker(TfEditCookie ec, _In_ ITfContext *pContext
 			if (!_IsComposing())
 				_StartComposition(pContext);
 			_AddComposingAndChar(ec, pContext, &emptyComposition.Set(L" ",1));
-
-			// Restore the candidate window to its correct position (before the stale re-layout)
-			if (_pUIPresenter && savedCandPt.x != 0 && savedCandPt.y != 0)
-			{
-				_pUIPresenter->_MoveCandidateTo(savedCandPt.x, savedCandPt.y);
-			}
 			
 		}
 		else
