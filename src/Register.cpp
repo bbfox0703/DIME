@@ -98,7 +98,7 @@ BOOL RegisterProfiles()
         static_cast<ULONG>(lenOfDesc),
         achIconFile,
         cchA,
-        (UINT)TEXTSERVICE_DAYI_ICON_INDEX, NULL, 0, TRUE, 0);
+        (UINT)TEXTSERVICE_DAYI_ICON_INDEX, NULL, 0, FALSE, 0);
 
     if (FAILED(hr))
     {
@@ -120,7 +120,7 @@ BOOL RegisterProfiles()
         static_cast<ULONG>(lenOfDesc),
         achIconFile,
         cchA,
-        (UINT)TEXTSERVICE_ARRAY_ICON_INDEX, NULL, 0, TRUE, 0);
+        (UINT)TEXTSERVICE_ARRAY_ICON_INDEX, NULL, 0, FALSE, 0);
 
     if (FAILED(hr))
     {
@@ -142,7 +142,7 @@ BOOL RegisterProfiles()
         static_cast<ULONG>(lenOfDesc),
         achIconFile,
         cchA,
-		(UINT)TEXTSERVICE_PHONETIC_ICON_INDEX, NULL, 0, TRUE, 0);
+		(UINT)TEXTSERVICE_PHONETIC_ICON_INDEX, NULL, 0, FALSE, 0);
 
     if (FAILED(hr))
     {
@@ -163,7 +163,7 @@ BOOL RegisterProfiles()
         static_cast<ULONG>(lenOfDesc),
         achIconFile,
         cchA,
-		(UINT)TEXTSERVICE_GENERIC_ICON_INDEX, NULL, 0, TRUE, 0);
+		(UINT)TEXTSERVICE_GENERIC_ICON_INDEX, NULL, 0, FALSE, 0);
 
     if (FAILED(hr))
     {

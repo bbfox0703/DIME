@@ -213,24 +213,22 @@ HRESULT CDIME::_HandleCandidateWorker(TfEditCookie ec, _In_ ITfContext *pContext
 		{
 
 			_pUIPresenter->_ClearCandidateList();
+			_pUIPresenter->_SetCandidateTextColor(CConfig::GetPhraseColor(), CConfig::GetItemBGColor());    // Text color is green
+			_pUIPresenter->_SetCandidateSelectedTextColor(CConfig::GetSelectedColor(), CConfig::GetSelectedBGColor());
+			_pUIPresenter->_SetCandidateNumberColor(CConfig::GetNumberColor(), CConfig::GetItemBGColor());
+			_pUIPresenter->_SetCandidateFillColor(CConfig::GetItemBGColor());
 			_pUIPresenter->_SetCandidateText(&candidatePhraseList, _pCompositionProcessorEngine->GetCandidateListIndexRange(),
-				FALSE, _pCompositionProcessorEngine->GetCandidateWindowWidth(), true);
+				FALSE, _pCompositionProcessorEngine->GetCandidateWindowWidth());
 			_pUIPresenter->_SetCandidateSelection(-1, FALSE); // set selected index to -1 if showing phrase candidates
 			_candidateMode = CANDIDATE_MODE::CANDIDATE_PHRASE;
-			_isCandidateWithWildcard = FALSE;	
-			
-			// Show phrase candidate window using the last saved composition rect for positioning.
-			// _StartLayout now updates the null range even for the same context,
-			// so _GetTextExt fails cleanly and the fallback uses _rectCompRange.
-			if (_pUIPresenter)
-			{
-				ITfDocumentMgr* pDocMgr = nullptr;
-				if (SUCCEEDED(pContext->GetDocumentMgr(&pDocMgr)))
-				{
-					_pUIPresenter->_StartCandidateList(_tfClientId, pDocMgr, pContext, ec, nullptr, _pCompositionProcessorEngine->GetCandidateWindowWidth());
-					pDocMgr->Release();
-				}
-			}
+			_isCandidateWithWildcard = FALSE;
+
+			//StartCandidateList require a valid selection from a valid pComposition to determine the location to show the candidate window
+			//Moved after setCandidateText or candidatePhraseList can be corrupt after probe composition.
+			CStringRange emptyComposition;
+			if (!_IsComposing())
+				_StartComposition(pContext);
+			_AddComposingAndChar(ec, pContext, &emptyComposition.Set(L" ",1));
 			
 		}
 		else

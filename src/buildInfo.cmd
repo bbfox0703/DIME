@@ -20,6 +20,9 @@ set _BuildSubVersion=%_BuildDate1%
 set _BuildVersion=1.3.%_CommitCount%.%_BuildDate1%
 set _BuildVersionStrShort=1.3.%_CommitCount%
 
+rem Build flavor (set to "custom" for fork builds, empty for upstream)
+set _BuildFlavor=custom
+
 rem Generate BuildInfo.h
 echo #define BUILD_VER_MAJOR 1 >BuildInfo.h
 echo #define BUILD_VER_MINOR 3 >>BuildInfo.h
@@ -36,6 +39,12 @@ echo #define BUILD_SUBVERSION %_BuildSubVersion% >>BuildInfo.h
 echo #define BUILD_VERSION_STR "%_BuildVersion%" >>BuildInfo.h
 echo #define BUILD_SUBVERSION_STR "%_BuildSubVersion%" >>BuildInfo.h
 echo #define BUILD_VERSION_STR_SHORT "%_BuildVersionStrShort%" >>BuildInfo.h
+echo #define BUILD_FLAVOR "%_BuildFlavor%" >>BuildInfo.h
+if "%_BuildFlavor%"=="" (
+echo #define BUILD_VERSION_DISPLAY_STR "%_BuildVersion%" >>BuildInfo.h
+) else (
+echo #define BUILD_VERSION_DISPLAY_STR "%_BuildVersion%-%_BuildFlavor%" >>BuildInfo.h
+)
 
 echo BuildInfo.h generated successfully.
 

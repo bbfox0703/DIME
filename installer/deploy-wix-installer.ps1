@@ -118,7 +118,15 @@ if ($ProductVersionOverride -ne "") {
 } else {
     $fullVersion = "$buildVersionStrShort.$buildSubVersionStr"  # e.g. "1.2.476.60303"
 }
-$displayVersion = "v$buildVersionStrShort"                    # e.g. "v1.2.476" (no build counter)
+# Extract BUILD_FLAVOR from BuildInfo.h (e.g. "custom")
+$buildFlavor = ""
+if (Test-Path $buildInfoPath) {
+    $flavorMatch = [regex]::Match($buildInfoContent, '#define BUILD_FLAVOR\s+"([^"]*)"')
+    if ($flavorMatch.Success -and $flavorMatch.Groups[1].Value -ne "") {
+        $buildFlavor = $flavorMatch.Groups[1].Value
+    }
+}
+$displayVersion = if ($buildFlavor -ne "") { "v$buildVersionStrShort-$buildFlavor" } else { "v$buildVersionStrShort" }
 
 # Generate deterministic ProductCode GUIDs from major.minor.commitcount.
 # Same version always gets the same ProductCode so rebuilds of the same version
