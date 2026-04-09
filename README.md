@@ -3,7 +3,7 @@
 [![License](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](LICENSE.md)
 [![Windows](https://img.shields.io/badge/Windows-8%20%7C%2010%20%7C%2011-blue)](https://github.com/bbfox0703/DIME)
 
-基於 [jrywu/DIME](https://github.com/jrywu/DIME) 的自訂分支，針對行列 30 使用者優化。
+基於 [jrywu/DIME](https://github.com/jrywu/DIME) 的自訂分支，基本上就是我選字時不想按 Shift 鍵的修正。
 
 ## 與上游的差異
 
