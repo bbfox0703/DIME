@@ -3,11 +3,11 @@
 [![License](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](LICENSE.md)
 [![Windows](https://img.shields.io/badge/Windows-8%20%7C%2010%20%7C%2011-blue)](https://github.com/bbfox0703/DIME)
 
-基於 [jrywu/DIME](https://github.com/jrywu/DIME) 的自訂分支，針對行列 30 使用者優化。
+基於 [jrywu/DIME](https://github.com/jrywu/DIME) 的自訂分支，基本上就是我選字時不想按 Shift 鍵的修正。
 
 ## 與上游的差異
 
-- **直接數字鍵選字**：候選字視窗中直接按數字鍵即可選字，不需搭配 Shift 鍵
+- **直接數字鍵選字**：候選字視窗中直接按數字鍵即可選字，**不需搭配 Shift 鍵**
 - **移除 Shift 切換英文模式**：避免與直接數字鍵選字衝突
 - **多螢幕 DPI 修正**：修正候選字視窗與提示視窗在不同 DPI 螢幕間移動時的顯示問題
 - **聯想字詞修正**：修正聯想字詞視窗在特定應用程式（如 Notepad++）中跳位的問題
@@ -84,22 +84,6 @@
 ### 移除
 
 在「設定」→「應用程式」→「已安裝的應用程式」中搜尋 DIME 並移除。
-
-## 從原始碼建置
-
-```batch
-# 產生版本資訊
-buildInfo.cmd
-
-# 建置 x64 Release
-msbuild DIME.sln /p:Configuration=Release /p:Platform=x64
-```
-
-安裝程式建置需要 [NSIS](https://nsis.sourceforge.io/)：
-```batch
-cd installer
-deploy-installerx64.cmd
-```
 
 ## 上游專案
 
