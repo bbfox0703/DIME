@@ -227,3 +227,9 @@ DIME.VC.db
 *.wixpdb
 installer/*.cin
 
+installer/DIME-32bit.msi
+installer/DIME-64bit.msi
+installer/DIME-Universal.zip
+installer/DIME-32bit.msi
+installer/DIME-64bit.msi
+installer/DIME-Universal.zip
