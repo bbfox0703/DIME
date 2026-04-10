@@ -79,6 +79,26 @@ foreach ($file in $filesToCopy) {
     }
 }
 
+# Copy .cin table files from Tables/ to installer staging directory
+Write-Host ""
+Write-Host "Copying .cin table files..." -ForegroundColor Yellow
+
+$cinFiles = @(
+    "phone.cin", "TCFreq.cin", "TCSC.cin",
+    "Array-Phrase.cin", "Array-Ext-B.cin", "Array-Ext-CD.cin", "Array-Ext-EF.cin",
+    "Array.cin", "Array40.cin", "Array-shortcode.cin", "Array-special.cin"
+)
+
+foreach ($cin in $cinFiles) {
+    $cinSource = "$PSScriptRoot\..\Tables\$cin"
+    if (Test-Path $cinSource) {
+        Copy-Item -Path $cinSource -Destination "$PSScriptRoot\" -Force
+        Write-Host "  Copied: $cin" -ForegroundColor Green
+    } else {
+        Write-Host "  WARNING: $cinSource not found!" -ForegroundColor Red
+    }
+}
+
 # ==============================================================================
 # Step 3: Build WiX installer (MSIs + Burn Bundle)
 # ==============================================================================
