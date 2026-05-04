@@ -516,7 +516,7 @@ BOOL CCompositionProcessorEngine::IsVirtualKeyNeed(UINT uCode, _In_reads_(1) WCH
 	// Processing dayi address input ---------------------------------------------------------
 	// // Symbol mode start with L'=' for dayi, L'w' for array30; L'H' and L'8' for array40 and \for Phonetic custom phrase input
 	if (IsEscapeInputChar(*pwch) && uCode != VK_SHIFT && candidateMode != CANDIDATE_MODE::CANDIDATE_ORIGINAL &&
-		!(CConfig::GetNumericPad() == NUMERIC_PAD::NUMERIC_PAD_MUMERIC && uCode >= VK_NUMPAD0 && uCode <= VK_DIVIDE))
+		!(CConfig::GetNumericPad() == NUMERIC_PAD::NUMERIC_PAD_NUMERIC && uCode >= VK_NUMPAD0 && uCode <= VK_DIVIDE))
 	{
 		if (pKeyState)
 		{
@@ -546,7 +546,7 @@ BOOL CCompositionProcessorEngine::IsVirtualKeyNeed(UINT uCode, _In_reads_(1) WCH
 	// Address characters direct input mode  "'[]-\"
 	if (IsDayiAddressChar(*pwch) && 
 		(candidateMode == CANDIDATE_MODE::CANDIDATE_NONE || candidateMode == CANDIDATE_MODE::CANDIDATE_PHRASE) &&
-		!(CConfig::GetNumericPad() == NUMERIC_PAD::NUMERIC_PAD_MUMERIC && uCode >= VK_NUMPAD0 && uCode <= VK_DIVIDE))
+		!(CConfig::GetNumericPad() == NUMERIC_PAD::NUMERIC_PAD_NUMERIC && uCode >= VK_NUMPAD0 && uCode <= VK_DIVIDE))
 	{
 		if (pKeyState)
 		{
@@ -829,7 +829,7 @@ BOOL CCompositionProcessorEngine::IsVirtualKeyKeystrokeComposition(UINT uCode, P
 	WCHAR c = towupper(*pwch);
 	if (c < 32 || c > 32 + MAX_RADICAL) return FALSE;
 
-	if (CConfig::GetNumericPad() == NUMERIC_PAD::NUMERIC_PAD_MUMERIC_COMPOSITION_ONLY &&
+	if (CConfig::GetNumericPad() == NUMERIC_PAD::NUMERIC_PAD_NUMERIC_COMPOSITION_ONLY &&
 		!(uCode >= VK_NUMPAD0 && uCode <= VK_DIVIDE))
 		return FALSE;
 
@@ -847,7 +847,7 @@ BOOL CCompositionProcessorEngine::IsVirtualKeyKeystrokeComposition(UINT uCode, P
 		&& !(Global::imeMode == IME_MODE::IME_MODE_PHONETIC && IsEscapeInputLeading())) return FALSE; //  input English with shift-a~z 
 
 	if (pKeystroke != nullptr && pKeystroke->Function != KEYSTROKE_FUNCTION::FUNCTION_NONE &&
-		!(CConfig::GetNumericPad() == NUMERIC_PAD::NUMERIC_PAD_MUMERIC && uCode >= VK_NUMPAD0 && uCode <= VK_DIVIDE))
+		!(CConfig::GetNumericPad() == NUMERIC_PAD::NUMERIC_PAD_NUMERIC && uCode >= VK_NUMPAD0 && uCode <= VK_DIVIDE))
 	{
 		if (function == KEYSTROKE_FUNCTION::FUNCTION_NONE)
 		{
