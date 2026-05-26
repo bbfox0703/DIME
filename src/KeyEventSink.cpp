@@ -189,6 +189,25 @@ BOOL CDIME::_IsKeyEaten(_In_ ITfContext *pContext, UINT codeIn, _Out_ UINT *pCod
 			_candidateMode = CANDIDATE_MODE::CANDIDATE_NONE;
 			_isCandidateWithWildcard = FALSE;
 		}
+		// Inverse race (Array30 dropped-select-key, user-reported):
+		// The TF_ES_ASYNCDONTCARE edit session at KeyHandler.cpp:583 sets
+		// _candidateMode only when it runs. A fast typist can press a select
+		// key (e.g. '1') after the candidate UI is visible but before the
+		// deferred session runs, leaving _candidateMode == NONE here. Without
+		// this guard, the key falls through to IsVirtualKeyKeystrokeComposition
+		// and becomes the first root of the next character. Promote to
+		// CANDIDATE_ORIGINAL so both IsVirtualKeyNeed and the downstream
+		// CCandidateRange::GetIndex (which returns -1 for CANDIDATE_NONE) see
+		// a valid candidate state. The deferred session will overwrite this
+		// with its proper value when it eventually runs.
+		else if (_candidateMode == CANDIDATE_MODE::CANDIDATE_NONE &&
+			candiCount > 0 &&
+			_pUIPresenter && _pUIPresenter->IsCandShown())
+		{
+			debugPrint(L"_IsKeyEaten: candiCount=%u with _candidateMode=NONE (async race), promoting to ORIGINAL",
+				candiCount);
+			_candidateMode = CANDIDATE_MODE::CANDIDATE_ORIGINAL;
+		}
 	
 		if (pCompositionProcessorEngine->IsVirtualKeyNeed(*pCodeOut, pwch, _IsComposing(), _candidateMode, _isCandidateWithWildcard, candiCount, candiSelection, pKeyState))
         {
