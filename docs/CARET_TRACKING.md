@@ -122,6 +122,27 @@ When the TSF rect is invalid (e.g. `{0,0,1,1}` from SearchHost.exe) and a
 prior value exists, the window stays at the last good position. Prevents
 jumping to screen origin.
 
+**Firefox-specific behaviour (hint slots):** Firefox returns `rcCaret={0,0,0,0}`
+from `GetGUIThreadInfo` and `TS_E_NOLAYOUT` from `GetTextExt` after a commit.
+`ShowNotifyText` handles this with four rules:
+
+- `validCaretPos` is checked against raw `rcCaret` **before** `ClientToScreen`;
+  `ClientToScreen({0,0})` maps to the Firefox window's screen origin (non-zero,
+  but wrong), so the post-transform value must not be used.
+- `_notifyLocation` is never overwritten when `validCaretPos=FALSE`. The value
+  set by `_LayoutChangeNotification` during active composition (via TextLayoutSink)
+  is the authoritative source for hint-slot positioning.
+- `_notifyLocation` is reset to the off-screen sentinel in `ResetCompRange()`,
+  which fires on every document-manager focus change. This prevents a stale Y from
+  a previous text field (e.g. a Gmail compose box) bleeding into a new field (e.g.
+  the search bar) — the scenario that produced correct X but wrong Y in Firefox/Gmail.
+- If `_notifyLocation` is still uninitialized after the reset (no TSF layout has
+  fired in the new field), `_candLocation` is used as approximation. This fallback
+  is conditioned on `_notifyLocation.x < 0` only — not on `refreshLocation` — so
+  a freshly-set `_notifyLocation` from `_LayoutChangeNotification` is never
+  overwritten by a potentially stale `_candLocation` from a prior field.
+See [CARET_TRACKING_PROBE.md §7](CARET_TRACKING_PROBE.md) for full details.
+
 ---
 
 ## 2. Positioning flow in `_LayoutChangeNotification`
@@ -185,6 +206,32 @@ make this work:
 | `TfTextLayoutSink.cpp` | `_StartLayout`: update `_pRangeComposition` even on same context |
 | `UIPresenter.cpp` | `_StartCandidateList`: skip `MakeCandidateWindow` if exists; else branch uses `_rectCompRange` |
 | `UIPresenter.h` | `_In_` → `_In_opt_` for `pRangeComposition` parameter |
+
+### Regression and re-fix (2026-04-28, during #127 verification)
+
+Items 2 and 3 above were **silently reverted** by commit `f898dd6` (*"Suppress
+CHN/ENG notify popup for non-editable windows on focus change"*). The
+regression went unnoticed for ~3 weeks — phrase candidates were technically
+visible for one paint cycle (because `_SetCandidateText`→`Show` runs *before*
+the destructive `_StartCandidateList` repositioning call) and then destroyed,
+producing a hard-to-spot blink.
+
+While verifying [#127_ISSUE.md](#127_ISSUE.md) with debug tracing, the pattern
+was identified and both guards restored. A third bug surfaced once the guards
+were back: `_GetTextExt` was returning `S_OK` (instead of failure) when
+`_pRangeComposition == nullptr`, leaving the caller's local rect at
+`{0,0,0,0}` and positioning the phrase window at screen origin. a97d654's
+commit message claimed *"_GetTextExt fails cleanly"* — but the function had
+always returned success in this case. Fixed by returning `E_FAIL` when
+`_pRangeComposition == nullptr` (also plugs a pre-existing `pContextView`
+leak on the failure path).
+
+| File | Change (this branch) |
+|------|----------------------|
+| `UIPresenter.cpp` | Restored `if (_pCandidateWnd) hr = S_OK;` guard around `MakeCandidateWindow` and `else _LayoutChangeNotification(&_rectCompRange, TRUE)` fallback |
+| `TfTextLayoutSink.cpp` | `_GetTextExt` returns `E_FAIL` when `_pRangeComposition == nullptr` (was returning `S_OK` with unpopulated rect) + `pContextView` leak fix |
+
+See [#127_ISSUE.md "Co-fixed regressions found during verification"](#127_ISSUE.md) for the full debug-log evidence.
 
 ---
 
@@ -384,6 +431,121 @@ Line 84: leaving OnSetFocus()                ← no ClearNotify called, notify s
 ```
 
 Key finding: **`OnSetFocus` fires on title bar click** — confirmed by debug trace. It fires AFTER the candidate is already dismissed. The notify is not cleared because `OnSetFocus` doesn't call `ClearNotify`.
+
+---
+
+## 11. Side-by-side notify covers typing text when assoc + RC both on (2026-04-28)
+
+### §11 Symptom
+
+With both **associated phrase** and **reverse-lookup IM** enabled, after committing a candidate the reverse-lookup notify appeared at the typing row, **covering the composition text**. Visible in Chromium-based hosts (Outlook web, Teams, Slack, the screenshot reporter); Notepad happened to be unaffected because its candidate window did not flip in the same scenario.
+
+When **assoc was OFF**, the same RC notify positioned correctly — strong hint that the bug was in the side-by-side path (which only fires when a candidate window is visible).
+
+### §11 Root cause
+
+`ShowNotifyText` ([UIPresenter.cpp:1575](../src/UIPresenter.cpp#L1575)) — the side-by-side branch when `_pCandidateWnd && _IsWindowVisible()`:
+
+```cpp
+// Before:
+if (_notifyLocation.x < (int) _pNotifyWnd->_GetWidth())
+    _pNotifyWnd->_Move(_notifyLocation.x + _pCandidateWnd->_GetWidth() + SHADOW_SPREAD/2, _notifyLocation.y);
+else
+    _pNotifyWnd->_Move(_notifyLocation.x - _pNotifyWnd->_GetWidth() - SHADOW_SPREAD/2, _notifyLocation.y);
+```
+
+`_notifyLocation.y` was just seeded a few lines above (lines 1552-1567) from `guiInfo->rcCaret.bottom` — i.e. **caret y**, not candidate y. With `refreshLocation = (notifyType == NOTIFY_OTHERS)` from #127, this re-seeds on every reverse-lookup notify show.
+
+Result:
+
+- The x-offset was correctly pushing notify to the side of the candidate.
+- The y was the **caret bottom** — the typing line.
+
+When the phrase candidate was below the line (the normal case after make-phrase): notify on typing row → covers text.
+When the phrase candidate was flipped above the line: notify still on typing row → loose floating between candidate and text.
+
+The cand-aligned positioning code in `_LayoutChangeNotification` lines 999-1011 has been correct since a97d654 — but `_LayoutChangeNotification` does not always run for async reverse-lookup notify shows (the path goes through `ShowNotifyText` directly, which seeds `_notifyLocation` from caret and does its own `_Move`).
+
+### §11 Fix
+
+Anchor both x and y to `_candLocation.{x,y}` (the candidate's actual top-left, maintained by `_LayoutChangeNotification` lines 967-968), matching the cand-aligned logic in lines 999-1011:
+
+```cpp
+// After:
+if (_candLocation.x < (int) _pNotifyWnd->_GetWidth())
+    _pNotifyWnd->_Move(_candLocation.x + _pCandidateWnd->_GetWidth() + SHADOW_SPREAD/2, _candLocation.y);
+else
+    _pNotifyWnd->_Move(_candLocation.x - _pNotifyWnd->_GetWidth() - SHADOW_SPREAD/2, _candLocation.y);
+```
+
+The non-side-by-side branch (no candidate visible) is unchanged and still uses `_notifyLocation` — preserving the assoc-OFF behavior that was already correct.
+
+### Why Notepad was masked
+
+In Notepad, the candidate window for the test case happened to land below the line (no flip), and the y mismatch between caret-bottom and candidate-top was small enough (or the notify was narrow enough vertically) that the visual overlap was not obvious. Chromium hosts produced larger candidate-vs-caret y deltas and made the bug visible.
+
+### Related work
+
+This is the side-by-side y-anchor counterpart of [REVERSE_CONV_REFACTOR.md "Change 6"](REVERSE_CONV_REFACTOR.md). The notify-positioning misalignment was a pre-existing latent bug that became visible only after #127 enabled `refreshLocation` for `NOTIFY_OTHERS`, which made the caret-y seed authoritative on every reverse-lookup show.
+
+---
+
+## 12. Flipped-candidate notify restack race (2026-05-04)
+
+### §12 Symptom
+
+When the composition is near the bottom of the screen and the candidate window flips
+**above** the caret, post-commit hint slots (REVERSE_LOOKUP, SPECIAL_CODE) overlapped
+the composition line. The overlapping slot varied between runs — sometimes the bottom
+slot, sometimes the middle slot — indicating a timing dependency rather than a
+deterministic geometry error.
+
+### §12 Root cause
+
+`ShowNotifyText`'s override block correctly sets `_notifyLocation.y = compRect.top -
+SHADOW_SPREAD/2` and `growUp = TRUE` when it detects the flipped state. However,
+`_LayoutChangeNotification` also calls:
+
+```cpp
+_RestackVisibleSlots(_DecideStackGrowUp());
+```
+
+`_DecideStackGrowUp()` with no candidate uses the screen-overflow check. With the
+flipped anchor `_notifyLocation.y ≈ 628` and slot totalH ≈ 90 px the sum is well
+below `SM_CYSCREEN`, so `growDown = FALSE` is returned. `_RestackVisibleSlots(FALSE)`
+then grows the stack **downward** from the flipped anchor into the composition line.
+
+Because layout events arrive asynchronously and can fire between consecutive
+`ShowNotifyText` calls, the number of already-placed slots at the time of the bad
+restack varies — explaining the inconsistency.
+
+### §12 Fix
+
+Mirror the same flipped-candidate detection inside `_LayoutChangeNotification` before
+calling `_RestackVisibleSlots` (see [#127_ISSUE.md — Flipped-candidate notify positioning](./%23127_ISSUE.md)):
+
+```cpp
+BOOL layoutGrowUp = _DecideStackGrowUp();
+if (!(_pCandidateWnd && _pCandidateWnd->_IsWindowVisible())
+    && compRect.bottom > compRect.top
+    && _candLocation.y < compRect.top)
+{
+    _notifyLocation.y = compRect.top - SHADOW_SPREAD / 2;
+    layoutGrowUp = TRUE;
+}
+_RestackVisibleSlots(layoutGrowUp);
+```
+
+When a layout event arrives while hint slots are in the flipped state, the restack
+uses `growUp = TRUE` with the correct bottom anchor regardless of when the event fires.
+
+### §12 Slot order when flipped
+
+With `growUp = TRUE`, forward index iteration (slot 0 → N) places CHN_ENG (slot 0) at
+the **bottom** of the upward stack — nearest the composition — and SPECIAL_CODE at the
+top. This mirrors the non-flipped convention (CHN_ENG nearest candidate/composition)
+and reverses the visual order naturally. The earlier `reverseIter` logic that forced
+CHN_ENG to the top in both modes was removed.
 
 ---
 

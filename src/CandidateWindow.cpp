@@ -353,6 +353,78 @@ void CCandidateWindow::_Show(BOOL isShowWnd)
 	{
 		ReleaseCapture();
 	}
+
+	// #135: keep candidate above any host WS_EX_TOPMOST popup that opens async
+	// after our show (Firefox autocomplete races our show by ~50-500ms). Re-stamp
+	// HWND_TOPMOST every STAY_ON_TOP_TICK_MS while window is visible. Using a raw
+	// TIMERPROC instead of _StartTimer / _OnTimerID because the latter's WM_TIMER
+	// dispatch path silently drops timer events on the candidate HWND for reasons
+	// not yet root-caused — but raw TIMERPROC on the same HWND fires reliably
+	// (proven by the diagnostic DELAYED Z-snap that lives on this HWND too).
+	// SetTimer with an existing ID just resets the period — no stacking.
+	if (isShowWnd)
+	{
+		HWND h = _GetWnd();
+		if (h)
+		{
+			SetTimer(h, UI::STAY_ON_TOP_TIMER_ID, UI::STAY_ON_TOP_TICK_MS,
+				[](HWND hwnd, UINT, UINT_PTR, DWORD) -> void
+				{
+					if (!IsWindow(hwnd) || !IsWindowVisible(hwnd)) return;
+
+					// Only re-stamp when a visible non-trivial NON-DIME window is above
+					// us in the topmost band. Walks GW_HWNDPREV chain and ignores:
+					// (a) system helpers (tiny rects like ThumbnailDeviceHelperWnd),
+					// (b) DIME's own window classes — notify, notify-shadow,
+					// candidate-shadow, scrollbar — identified by class atom.
+					// Note: PID-based filtering would NOT work because DIME is a TSF
+					// IME DLL loaded in-process into the host (firefox.exe), so DIME
+					// windows and Firefox's autocomplete popup share the same PID.
+					// #135 follow-up: with reverse-lookup notify on, our notify
+					// (WS_EX_TOPMOST) sits above the candidate. The pre-fix check
+					// treated it as a competitor and re-stamped every 30 ms, cascading
+					// through WM_WINDOWPOSCHANGED → shadow _OnOwnerWndMoved (visible
+					// flicker) and starving the budget meant to beat Firefox.
+					HWND cur = GetWindow(hwnd, GW_HWNDPREV);
+					int  depth = 0;
+					while (cur && depth < 20)
+					{
+						if (IsWindowVisible(cur))
+						{
+							ATOM cls = (ATOM)GetClassWord(cur, GCW_ATOM);
+							BOOL isOurs = (cls == Global::AtomCandidateWindow
+							            || cls == Global::AtomCandidateShadowWindow
+							            || cls == Global::AtomCandidateScrollBarWindow
+							            || cls == Global::AtomNotifyWindow
+							            || cls == Global::AtomNotifyShadowWindow);
+							if (!isOurs)
+							{
+								RECT rc;
+								if (GetWindowRect(cur, &rc))
+								{
+									int w = rc.right - rc.left;
+									int hgt = rc.bottom - rc.top;
+									if (w > 8 && hgt > 8)
+									{
+										// Real non-DIME visible competitor — re-stamp ourselves.
+										SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+											SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+										return;
+									}
+								}
+							}
+						}
+						cur = GetWindow(cur, GW_HWNDPREV);
+						depth++;
+					}
+				});
+		}
+	}
+	else
+	{
+		HWND h = _GetWnd();
+		if (h) KillTimer(h, UI::STAY_ON_TOP_TIMER_ID);
+	}
 }
 
 //+---------------------------------------------------------------------------

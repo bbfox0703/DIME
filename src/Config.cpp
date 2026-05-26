@@ -65,7 +65,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 IME_MODE CConfig::_imeMode = IME_MODE::IME_MODE_NONE;
 BOOL CConfig::_loadTableMode = FALSE;
 ARRAY_SCOPE CConfig::_arrayScope = ARRAY_SCOPE::ARRAY30_UNICODE_EXT_A;
-NUMERIC_PAD CConfig::_numericPad = NUMERIC_PAD::NUMERIC_PAD_MUMERIC;
+NUMERIC_PAD CConfig::_numericPad = NUMERIC_PAD::NUMERIC_PAD_NUMERIC;
 BOOL CConfig::_clearOnBeep = TRUE;
 BOOL CConfig::_doBeep = TRUE;
 BOOL CConfig::_doBeepNotify = TRUE;
@@ -613,7 +613,7 @@ void CConfig::ResetAllDefaults(IME_MODE imeMode)
 	_showNotifyDesktop            = TRUE;
 	_dayiArticleMode              = FALSE;
 	_big5Filter                   = FALSE;
-	_numericPad                   = NUMERIC_PAD::NUMERIC_PAD_MUMERIC;
+	_numericPad                   = NUMERIC_PAD::NUMERIC_PAD_NUMERIC;
 	_phoneticKeyboardLayout       = PHONETIC_KEYBOARD_LAYOUT::PHONETIC_STANDARD_KEYBOARD_LAYOUT;
 	_imeShiftMode                 = IME_SHIFT_MODE::IME_BOTH_SHIFT;
 	_doubleSingleByteMode         = DOUBLE_SINGLE_BYTE_MODE::DOUBLE_SINGLE_BYTE_ALWAYS_SINGLE;
@@ -884,6 +884,11 @@ void CConfig::EnumerateReverseConversionProviders(LANGID langid)
 
 void CConfig::SetReverseConversionSelection(UINT sel)
 {
+	if (_reverseConversionDescription)
+	{
+		delete[] _reverseConversionDescription;
+		_reverseConversionDescription = nullptr;
+	}
 	if (sel == 0)
 	{
 		_reverseConverstionCLSID = CLSID_NULL;
@@ -901,6 +906,11 @@ void CConfig::SetReverseConversionSelection(UINT sel)
 		if(_reverseConversionDescription)
 			StringCchCopy(_reverseConversionDescription, wcslen(_reverseConvervsionInfoList->GetAt(sel)->description) + 1, _reverseConvervsionInfoList->GetAt(sel)->description);
 	}
+	// Completes REVERSE_CONV_REFACTOR.md item B: any selection change through
+	// this API must mark the IME-side _pITfReverseConversion[] cache for reload.
+	// The legacy ConfigDialog also did this on combo SELCHANGE; the new
+	// SettingsWindow had no equivalent line, leaving the cache stale.
+	_reloadReverseConversion = TRUE;
 }
 
 

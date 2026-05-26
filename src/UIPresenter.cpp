@@ -54,7 +54,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //----------------------------------------------------------------------------
 
 CUIPresenter::CUIPresenter(_In_ CDIME *pTextService, CCompositionProcessorEngine *pCompositionProcessorEngine)
-    : CTfTextLayoutSink(pTextService), _pCandidateWnd(nullptr), _pNotifyWnd(nullptr), _Category(KEYSTROKE_CATEGORY::CATEGORY_NONE), _pIndexRange(nullptr)
+    : CTfTextLayoutSink(pTextService), _pCandidateWnd(nullptr), _Category(KEYSTROKE_CATEGORY::CATEGORY_NONE), _pIndexRange(nullptr)
 {
     debugPrint(L"CUIPresenter::CUIPresenter() constructor");
     _pTextService = pTextService;
@@ -234,9 +234,13 @@ HRESULT CUIPresenter::ToShowUIWindows()
 	debugPrint(L"CUIPresenter::ToShowUIWindows()");
     _MoveUIWindowsToTextExt();
     if(_pCandidateWnd) _pCandidateWnd->_Show(TRUE);
-	if(_pNotifyWnd && _pNotifyWnd->GetNotifyType() == NOTIFY_TYPE::NOTIFY_OTHERS)
+	// Re-show any compositional-hint slot that was created but is currently hidden.
+	// Mode-state slot (NOTIFY_CHN_ENG) is excluded — its visibility is driven by
+	// its own delay-/auto-hide timers, not by candidate-window UI cycling.
+	for (size_t i = 0; i < _pNotifyWnds.size(); ++i)
 	{
-		_pNotifyWnd->_Show(TRUE);
+		if (i == (size_t)NOTIFY_TYPE::NOTIFY_CHN_ENG) continue;
+		if (_pNotifyWnds[i]) _pNotifyWnds[i]->_Show(TRUE);
 	}
 
 
@@ -246,11 +250,8 @@ HRESULT CUIPresenter::ToShowUIWindows()
 HRESULT CUIPresenter::ToHideUIWindows()
 {
 	debugPrint(L"CUIPresenter::ToHideUIWindows()");
-	if (_pCandidateWnd)	_pCandidateWnd->_Show(FALSE);	
-	if(_pNotifyWnd)
-	{
-		ClearNotify();
-	}
+	if (_pCandidateWnd)	_pCandidateWnd->_Show(FALSE);
+	ClearNotify();
 
     _updatedFlags = TF_CLUIE_SELECTION | TF_CLUIE_CURRENTPAGE;
     _UpdateUIElement();
@@ -550,11 +551,25 @@ HRESULT CUIPresenter::_StartCandidateList(TfClientId tfClientId, _In_ ITfDocumen
 
     BeginUIElement();
 
-	
-    hr = MakeCandidateWindow(pContextDocument, wndWidth);
-    if (FAILED(hr))
+
+    if (_pCandidateWnd)
     {
-        goto Exit;
+        // Candidate window already exists (e.g. reusing for phrase candidates after
+        // commit — _ClearCandidateList + _SetCandidateText repopulated it). Skip
+        // creation; MakeCandidateWindow returns E_FAIL when _pCandidateWnd != nullptr,
+        // which would tear down the just-populated window via the Exit branch.
+        // (Regression from f898dd6 that reverted a97d654's guard. See debug log
+        //  pattern: phrase list shows briefly then _EndCandidateList fires with
+        //  _StartCandidateList returning E_FAIL.)
+        hr = S_OK;
+    }
+    else
+    {
+        hr = MakeCandidateWindow(pContextDocument, wndWidth);
+        if (FAILED(hr))
+        {
+            goto Exit;
+        }
     }
 
 	Show(_isShowMode);
@@ -563,6 +578,12 @@ HRESULT CUIPresenter::_StartCandidateList(TfClientId tfClientId, _In_ ITfDocumen
     if (SUCCEEDED(_GetTextExt(&rcTextExt)))
     {
         _LayoutChangeNotification(&rcTextExt);
+    }
+    else
+    {
+        // No composition range (e.g. phrase candidates after commit).
+        // Reuse the last saved composition rect — the caret hasn't moved.
+        _LayoutChangeNotification(&_rectCompRange, TRUE);
     }
 
 Exit:
@@ -697,11 +718,12 @@ void CUIPresenter::_ClearCandidateList()
 //----------------------------------------------------------------------------
 void CUIPresenter::_SetNotifyTextColor(COLORREF crColor, COLORREF crBkColor)
 {
-	if(_pNotifyWnd)
+	for (auto& w : _pNotifyWnds)
 	{
-	    _pNotifyWnd->_SetTextColor(crColor, crBkColor);
-		_pNotifyWnd->_SetFillColor(crBkColor);
-		_pNotifyWnd->_InvalidateRect();
+		if (!w) continue;
+		w->_SetTextColor(crColor, crBkColor);
+		w->_SetFillColor(crBkColor);
+		w->_InvalidateRect();
 	}
 }
 
@@ -959,59 +981,64 @@ VOID CUIPresenter::_LayoutChangeNotification(_In_ RECT *lpRect, BOOL firstCall)
 
 		}
 	}
-	if (_pNotifyWnd && lpRect)
+	// Find the slot to use as the "anchor" for max-width calc and stack-vs-candidate
+	// positioning. Use the first visible slot (index order) — typically slot 0
+	// (CHN_ENG) when only mode-state is visible, otherwise the lowest hint slot.
+	CNotifyWindow* anchorWnd = nullptr;
+	UINT stackMaxWidth = 0;
+	for (auto& w : _pNotifyWnds)
+	{
+		if (!w || !w->_IsWindowVisible()) continue;
+		if (!anchorWnd) anchorWnd = w.get();
+		if (w->_GetWidth() > stackMaxWidth) stackMaxWidth = w->_GetWidth();
+	}
+	if (anchorWnd && lpRect)
 	{
 		// Recreate font for fitting current monitor resolution and font size
-		//if (Global::isWindows8) CConfig::SetDefaultTextFont(_pNotifyWnd->_GetWnd());
 		if (lpRect->bottom - lpRect->top > 1 || lpRect->right - lpRect->left > 1)   // confirm the extent rect is valid.
 		{
 
 			if (_pCandidateWnd && _pCandidateWnd->_IsWindowVisible())
 			{
-				/*
-				debugPrint(L"notify width = %d, candwidth = %d", _pNotifyWnd->_GetWidth(), _pCandidateWnd->_GetWidth());
-				if (candPt.x < (int)_pNotifyWnd->_GetWidth())
-				{
-					_pNotifyWnd->_Move(candPt.x + _pCandidateWnd->_GetWidth(), candPt.y);
-					debugPrint(L"move notify to x = %d, y = %d", candPt.x + _pCandidateWnd->_GetWidth(), candPt.y);
-				}
+				debugPrint(L"notify max width = %d, candwidth = %d", stackMaxWidth, _pCandidateWnd->_GetWidth());
+				// Per-slot x (right-edge aligned to candidate's left) is applied
+				// inside _RestackVisibleSlots when the candidate is visible.
+				// Here we just set the y anchor: snap to candidate's top edge,
+				// or its bottom-minus-anchorHeight when candidate is above caret.
+				if (candPt.y < lpRect->top)
+					_notifyLocation.y = candPt.y + (candRect.bottom - candRect.top) - anchorWnd->_GetHeight();
 				else
-				{
-					_pNotifyWnd->_Move(candPt.x - _pNotifyWnd->_GetWidth(), candPt.y);
-					debugPrint(L"move notify to x = %d, y = %d", candPt.x - _pNotifyWnd->_GetWidth(), candPt.y);
-				}
-				_notifyLocation.x = candPt.x;
-				_notifyLocation.y = candPt.y;
-				*/
-				debugPrint(L"notify width = %d, candwidth = %d", _pNotifyWnd->_GetWidth(), _pCandidateWnd->_GetWidth());
-				// cand window is on the top of caret
-				if (candPt.y < lpRect->top) 
-					_notifyLocation.y = candPt.y + (candRect.bottom - candRect.top) - _pNotifyWnd->_GetHeight();
-				else 
 					_notifyLocation.y = candPt.y;
-
-				if (candPt.x < (int)_pNotifyWnd->_GetWidth())
-					_notifyLocation.x = candPt.x + _pCandidateWnd->_GetWidth() + SHADOW_SPREAD / 2;
-				else
-					_notifyLocation.x = candPt.x - _pNotifyWnd->_GetWidth() - SHADOW_SPREAD / 2;
-					
-				_pNotifyWnd->_Move(_notifyLocation.x, _notifyLocation.y);
-				debugPrint(L"move notify to x = %d, y = %d", _notifyLocation.x, _notifyLocation.y);
-				_notifyLocation.x = candPt.x;
+				debugPrint(L"_LayoutChangeNotification cand-visible: candPt.y=%d lpRect->top=%d _notifyLocation.y=%d", candPt.y, lpRect->top, _notifyLocation.y);
 			}
 			else
 			{
-				_pNotifyWnd->_GetClientRect(&notifyRect);
+				anchorWnd->_GetClientRect(&notifyRect);
 				if (((compRect.right - compRect.left) > (notifyRect.right - notifyRect.left)) && caretPt.x < compRect.right && caretPt.x >= compRect.left)
 					compRect.left = caretPt.x;
 
-				_pNotifyWnd->_GetWindowExtent(&compRect, &notifyRect, &notifyPt);
-				_pNotifyWnd->_Move(notifyPt.x, notifyPt.y);
+				anchorWnd->_GetWindowExtent(&compRect, &notifyRect, &notifyPt);
 				_notifyLocation.x = notifyPt.x;
 				_notifyLocation.y = notifyPt.y;
-				debugPrint(L"move notify to x = %d, y = %d", notifyPt.x, notifyPt.y);
+				debugPrint(L"_LayoutChangeNotification no-cand: notifyPt.x=%d notifyPt.y=%d compRect.top=%d compRect.bottom=%d", notifyPt.x, notifyPt.y, compRect.top, compRect.bottom);
 			}
-
+			// Translate the whole visible stack to the new anchor; keep slot order.
+			// Mirror the flipped-candidate detection from ShowNotifyText: if the
+			// candidate was above the composition (flipped) and is now gone, force
+			// growUp and realign the bottom anchor so a layout event fired between
+			// notify shows doesn't restack the slots downward into the composition line.
+			{
+				BOOL layoutGrowUp = _DecideStackGrowUp();
+				if (!(_pCandidateWnd && _pCandidateWnd->_IsWindowVisible())
+					&& compRect.bottom > compRect.top
+					&& _candLocation.y < compRect.top)
+				{
+					_notifyLocation.y = compRect.top - SHADOW_SPREAD / 2;
+					layoutGrowUp = TRUE;
+				}
+				_RestackVisibleSlots(layoutGrowUp);
+			}
+			debugPrint(L"move notify stack to x = %d, y = %d", _notifyLocation.x, _notifyLocation.y);
 		}
 	}
 	_rectCompRange = compRect;
@@ -1068,31 +1095,39 @@ HRESULT CUIPresenter::_NotifyChangeNotification(_In_ enum NOTIFY_WND action, _In
 			Global::IsShiftKeyDownOnly = FALSE;
 			break;
 		case NOTIFY_WND::SHOW_NOTIFY:
-			if((NOTIFY_TYPE)lParam == NOTIFY_TYPE::NOTIFY_CHN_ENG && !_pTextService->_IsComposing())
+		{
+			NOTIFY_TYPE nt = (NOTIFY_TYPE)lParam;
+			BOOL isHintSlot = (nt == NOTIFY_TYPE::NOTIFY_REVERSE_LOOKUP
+			                   || nt == NOTIFY_TYPE::NOTIFY_SPECIAL_CODE
+			                   || nt == NOTIFY_TYPE::NOTIFY_BEEP);
+			// Issue #127: probe should fire for compositional-hint slots too so
+			// those popups track the caret even when the floating CHN/ENG notify
+			// (which used to be the sole probe trigger) is disabled.
+			BOOL needProbe = (nt == NOTIFY_TYPE::NOTIFY_CHN_ENG && _pTextService && !_pTextService->_IsComposing())
+			                 || isHintSlot;
+			if (needProbe && _pTextService && _GetContextDocument() == nullptr)  //layout is not started. we need to do probecomposition to start layout
 			{
-				if(_pTextService && _GetContextDocument() == nullptr)  //layout is not started. we need to do probecomposition to start layout
+				ITfContext* pContext = nullptr;
+				ITfThreadMgr* pThreadMgr = nullptr;
+				ITfDocumentMgr* pDocumentMgr = nullptr;
+				pThreadMgr = _pTextService->_GetThreadMgr();
+				if (pThreadMgr)
 				{
-					ITfContext* pContext = nullptr;
-					ITfThreadMgr* pThreadMgr = nullptr;
-					ITfDocumentMgr* pDocumentMgr = nullptr;
-					pThreadMgr = _pTextService->_GetThreadMgr();
-					if (pThreadMgr)
+					if (SUCCEEDED(pThreadMgr->GetFocus(&pDocumentMgr)) && pDocumentMgr)
 					{
-						if (SUCCEEDED(pThreadMgr->GetFocus(&pDocumentMgr)) && pDocumentMgr)
+						if(SUCCEEDED(pDocumentMgr->GetTop(&pContext)) && pContext)
 						{
-							if(SUCCEEDED(pDocumentMgr->GetTop(&pContext)) && pContext)
-							{
-								ShowNotify(TRUE, 0, (UINT) wParam);
-								_pTextService->_ProbeComposition(pContext);
-							}
-
+							ShowNotify(TRUE, 0, (UINT) wParam, nt);
+							_pTextService->_ProbeComposition(pContext);
 						}
+
 					}
 				}
 			}
-			else if((NOTIFY_TYPE)lParam == NOTIFY_TYPE::NOTIFY_OTHERS || (_pCandidateWnd && !_pCandidateWnd->_IsWindowVisible()))
-				ShowNotify(TRUE, 0, (UINT) wParam);
+			else if(isHintSlot || (_pCandidateWnd && !_pCandidateWnd->_IsWindowVisible()))
+				ShowNotify(TRUE, 0, (UINT) wParam, nt);
 			break;
+		}
 	}
 	return S_OK;
 
@@ -1408,56 +1443,58 @@ Exit:
 HRESULT CUIPresenter::MakeNotifyWindow(_In_ ITfContext *pContextDocument, _In_ CStringRange * notifyText, _In_ enum NOTIFY_TYPE notifyType)
 {
 	HRESULT hr = S_OK;
+	size_t idx = (size_t)notifyType;
+	if (idx >= _pNotifyWnds.size()) return S_FALSE;
+	auto& slot = _pNotifyWnds[idx];
 
-
-	if (nullptr == _pNotifyWnd)
+	if (nullptr == slot)
     {
-		_pNotifyWnd = std::make_unique<CNotifyWindow>(_NotifyWndCallback, this, notifyType);
+		slot = std::make_unique<CNotifyWindow>(_NotifyWndCallback, this, notifyType);
 	}
 
-    if (nullptr == _pNotifyWnd)	return S_FALSE;
-  
+    if (nullptr == slot)	return S_FALSE;
+
 	HWND parentWndHandle = nullptr;
     ITfContextView* pView = nullptr;
     if (pContextDocument && SUCCEEDED(pContextDocument->GetActiveView(&pView)) && pView)
     {
         pView->GetWnd(&parentWndHandle);
     }
-	
-	if (_pNotifyWnd && _pNotifyWnd->_GetUIWnd() == nullptr)
+
+	if (slot->_GetUIWnd() == nullptr)
 	{
-		if( !_pNotifyWnd->_Create(CConfig::GetFontSize(), parentWndHandle, notifyText))
+		if( !slot->_Create(CConfig::GetFontSize(), parentWndHandle, notifyText))
 		{
 			hr = E_OUTOFMEMORY;
 			return hr;
 		}
 	}
-	
+
 	return hr;
-    
+
 }
 
-	
-void CUIPresenter::SetNotifyText(_In_ CStringRange *pNotifyText)
+
+void CUIPresenter::SetNotifyText(_In_ CStringRange *pNotifyText, _In_opt_ NOTIFY_TYPE notifyType)
 {
 	debugPrint(L"CUIPresenter::SetNotifyText()");
-	if (_pNotifyWnd)
+	size_t idx = (size_t)notifyType;
+	if (idx < _pNotifyWnds.size() && _pNotifyWnds[idx])
 	{
-		_pNotifyWnd->_SetString(pNotifyText);
-
+		_pNotifyWnds[idx]->_SetString(pNotifyText);
 	}
 }
-void CUIPresenter::ShowNotify(_In_ BOOL showMode,  _In_opt_ UINT delayShow, _In_opt_ UINT timeToHide)
+void CUIPresenter::ShowNotify(_In_ BOOL showMode,  _In_opt_ UINT delayShow, _In_opt_ UINT timeToHide, _In_opt_ NOTIFY_TYPE notifyType)
 {
-	debugPrint(L"CUIPresenter::ShowNotify()");
-	if (_pNotifyWnd)
-		_pNotifyWnd->_Show(showMode, delayShow, timeToHide);
+	debugPrint(L"CUIPresenter::ShowNotify(slot=%d)", (int)notifyType);
+	size_t idx = (size_t)notifyType;
+	if (idx < _pNotifyWnds.size() && _pNotifyWnds[idx])
+		_pNotifyWnds[idx]->_Show(showMode, delayShow, timeToHide);
 }
 void CUIPresenter::ClearAll()
 {
 	debugPrint(L"CUIPresenter::ClearAll()");
-	if(_pNotifyWnd)
-		ClearNotify();
+	ClearNotify();
 	if(_pCandidateWnd)
 		_EndCandidateList();
 }
@@ -1465,18 +1502,106 @@ void CUIPresenter::ClearAll()
 void CUIPresenter::ClearNotify()
 {
 	debugPrint(L"CUIPresenter::ClearNotify()");
-	if (_pNotifyWnd)
+	BOOL anySlot = FALSE;
+	for (auto& w : _pNotifyWnds)
 	{
-		if(_GetContextDocument() && _pCandidateWnd == nullptr) //cand is not here. the layoutsink was start by notify, and we need to end here.
-			_EndLayout();
-
-		DisposeNotifyWindow(); //recreate the window so as the ITfContext is always from the latest one.
+		if (w) { anySlot = TRUE; break; }
 	}
-	
+	if (!anySlot) return;
+
+	if (_GetContextDocument() && _pCandidateWnd == nullptr) //cand is not here. the layoutsink was start by notify, and we need to end here.
+		_EndLayout();
+
+	DisposeNotifyWindow();  // disposes all slots
+}
+
+BOOL CUIPresenter::_AnyHintSlotVisible() const
+{
+	auto& rl = _pNotifyWnds[(size_t)NOTIFY_TYPE::NOTIFY_REVERSE_LOOKUP];
+	auto& sc = _pNotifyWnds[(size_t)NOTIFY_TYPE::NOTIFY_SPECIAL_CODE];
+	return ((rl && rl->_IsWindowVisible()) || (sc && sc->_IsWindowVisible())) ? TRUE : FALSE;
+}
+
+BOOL CUIPresenter::_DecideStackGrowUp() const
+{
+	if (_pCandidateWnd && _pCandidateWnd->_IsWindowVisible())
+	{
+		RECT cr = { 0,0,0,0 };
+		_pCandidateWnd->_GetWindowRect(&cr);
+		return (cr.top < _notifyLocation.y) ? TRUE : FALSE;
+	}
+	// No candidate: only flip up if downward stack would overflow screen bottom.
+	int totalH = 0;
+	for (auto& w : _pNotifyWnds)
+	{
+		if (w && w->_IsWindowVisible())
+			totalH += w->_GetHeight() + SHADOW_SPREAD / 2;
+	}
+	int screenBottom = GetSystemMetrics(SM_CYSCREEN);
+	return (_notifyLocation.y + totalH > screenBottom) ? TRUE : FALSE;
+}
+
+POINT CUIPresenter::_ComputeStackPosForNewSlot(_In_ NOTIFY_TYPE newSlot, _In_ BOOL growUp) const
+{
+	POINT p = _notifyLocation;
+	int offset = 0;
+	for (size_t i = 0; i < _pNotifyWnds.size(); ++i)
+	{
+		if (i == (size_t)newSlot) continue;
+		auto& w = _pNotifyWnds[i];
+		if (w && w->_IsWindowVisible())
+			offset += (int)w->_GetHeight() + SHADOW_SPREAD / 2;
+	}
+	auto& self = _pNotifyWnds[(size_t)newSlot];
+	int h = (self ? (int)self->_GetHeight() : 0);
+	p.y = growUp ? (_notifyLocation.y - h - offset)
+	             : (_notifyLocation.y + offset);
+	return p;
+}
+
+void CUIPresenter::_RestackVisibleSlots(_In_ BOOL growUp)
+{
+	// X rule: candidate visible → each slot's RIGHT edge aligned to candidate's
+	// left edge (per-slot x). No candidate → all share _notifyLocation.x.
+	// Y rule (candidate visible):
+	//   growUp=false → first slot's TOP at candidate's TOP, stack grows down.
+	//   growUp=true  → first slot's BOTTOM at candidate's BOTTOM, stack grows up.
+	// Y rule (no candidate): anchor y is _notifyLocation.y as set by caller.
+	BOOL candVisible = (_pCandidateWnd && _pCandidateWnd->_IsWindowVisible());
+	int candLeft = 0;
+	int anchorY = _notifyLocation.y;
+	if (candVisible)
+	{
+		RECT cr = { 0,0,0,0 };
+		_pCandidateWnd->_GetWindowRect(&cr);
+		candLeft = _candLocation.x - SHADOW_SPREAD / 2;
+		anchorY = growUp ? cr.bottom : _candLocation.y;
+	}
+
+	// Always iterate slots in index order (0 → N). When growing down, slot 0
+	// (CHN_ENG) lands at the top nearest the candidate/composition; when growing
+	// up (flipped), slot 0 lands at the bottom nearest the composition — the
+	// visual order reverses naturally, mirroring the candidate-flipped behaviour.
+	int offset = 0;
+	int n = (int)_pNotifyWnds.size();
+	for (int i = 0; i < n; ++i)
+	{
+		auto& w = _pNotifyWnds[i];
+		if (!w || !w->_IsWindowVisible()) continue;
+		int h = (int)w->_GetHeight();
+		int slotX = candVisible ? (candLeft - (int)w->_GetWidth())
+		                        : _notifyLocation.x;
+		int slotY = growUp ? (anchorY - h - offset)
+		                   : (anchorY + offset);
+		w->_Move(slotX, slotY);
+		offset += h + SHADOW_SPREAD / 2;
+	}
 }
 void CUIPresenter::ResetCompRange()
 {
 	SetRect(&_rectCompRange, 0, 0, 0, 0);
+	_notifyLocation = { UI::DEFAULT_WINDOW_X, UI::DEFAULT_WINDOW_Y };
+	debugPrint(L"ResetCompRange: _notifyLocation reset to DEFAULT_WINDOW");
 }
 void CUIPresenter::ShowNotifyText(_In_ CStringRange* pNotifyText, _In_opt_ UINT delayShow, _In_opt_ UINT timeToHide, _In_opt_ NOTIFY_TYPE notifyType)
 {
@@ -1485,16 +1610,17 @@ void CUIPresenter::ShowNotifyText(_In_ CStringRange* pNotifyText, _In_opt_ UINT 
 	ITfThreadMgr* pThreadMgr = nullptr;
 	ITfDocumentMgr* pDocumentMgr = nullptr;
 
+	size_t idx = (size_t)notifyType;
+	if (idx >= _pNotifyWnds.size()) return;
 
-	if (_pNotifyWnd) 
-	{
-		if (notifyType == NOTIFY_TYPE::NOTIFY_CHN_ENG && _pNotifyWnd->GetNotifyType() == NOTIFY_TYPE::NOTIFY_OTHERS)
-			return;
-		else
-			ClearNotify();
-	}
+	// Issue #127 / multi-notify: CHN_ENG (and other mode-state slots) must not
+	// clobber a visible compositional-hint slot. Generalised guard from the
+	// historical CHN_ENG-vs-OTHERS rule.
+	if (notifyType == NOTIFY_TYPE::NOTIFY_CHN_ENG && _AnyHintSlotVisible())
+		return;
 
-
+	// Replace-in-place for the SAME slot; leave OTHER slots untouched (was: ClearNotify all).
+	DisposeNotifyWindow(notifyType);
 
 	if(pContext == nullptr && _pTextService)
 	{
@@ -1503,16 +1629,16 @@ void CUIPresenter::ShowNotifyText(_In_ CStringRange* pNotifyText, _In_opt_ UINT 
 		{
 			if (SUCCEEDED(pThreadMgr->GetFocus(&pDocumentMgr)) && pDocumentMgr)
 			{
-				pDocumentMgr->GetTop(&pContext); 
+				pDocumentMgr->GetTop(&pContext);
 			}
 		}
 	}
-	
+
 	if(pContext != nullptr)
 	{
 		if(MakeNotifyWindow(pContext, pNotifyText, notifyType)== S_OK)
 		{
-		
+
 			if (CConfig::GetEffectiveDarkMode())
 			_SetNotifyTextColor(CConfig::GetDarkItemColor(), CConfig::GetDarkItemBGColor());
 		else if (CConfig::GetColorMode() == IME_COLOR_MODE::IME_COLOR_MODE_CUSTOM)
@@ -1533,51 +1659,143 @@ void CUIPresenter::ShowNotifyText(_In_ CStringRange* pNotifyText, _In_opt_ UINT 
 				// Use stack allocation instead of heap allocation to avoid memory leaks
 				GUITHREADINFO guiInfo = {0};
 				guiInfo.cbSize = sizeof(GUITHREADINFO);
-				
-				if(GetGUIThreadInfo(NULL, &guiInfo) && parentWndHandle) 
+				// Issue #127: for transient slots (compositional hints + BEEP),
+				// refresh _notifyLocation each show so a stale value from an earlier
+				// show does not stick. The probe call below (also widened) will
+				// overwrite with the precise caret rect when GetTextExt succeeds.
+				// Pre-multi-notify this matched the old NOTIFY_OTHERS bucket; without
+				// BEEP here the 錯誤組字 popup pinned to (0,0) in Firefox after the
+				// first show seeded _notifyLocation to a non-negative stale value.
+				BOOL refreshLocation = (notifyType == NOTIFY_TYPE::NOTIFY_REVERSE_LOOKUP
+				                        || notifyType == NOTIFY_TYPE::NOTIFY_SPECIAL_CODE
+				                        || notifyType == NOTIFY_TYPE::NOTIFY_BEEP);
+				// Track whether a valid caret position was actually written to _notifyLocation
+				// from GetGUIThreadInfo or GetCaretPos. When FALSE (e.g. Firefox always returns
+				// zero rcCaret), the _candLocation fallback below must cover the refreshLocation
+				// case too — not just the uninitialised case — to avoid reusing a stale
+				// _notifyLocation from a previous typing session at a different screen position.
+				BOOL caretUpdated = FALSE;
+
+				if(GetGUIThreadInfo(NULL, &guiInfo) && parentWndHandle)
 				{   //for ancient non TSF aware apps with a floating composition window.  The caret position we can get is always the caret in the floating composition window.
+					// Check raw rcCaret BEFORE ClientToScreen. Firefox/Chromium return
+					// rcCaret={0,0,0,0}; ClientToScreen then maps that to the window's
+					// screen origin (non-zero), which would wrongly overwrite a cached
+					// valid position with the browser window's top-left corner.
+					BOOL validCaretPos = (guiInfo.rcCaret.left   != 0 || guiInfo.rcCaret.top    != 0
+					                   || guiInfo.rcCaret.right  != 0 || guiInfo.rcCaret.bottom != 0);
 					POINT pt;
 					pt.x = guiInfo.rcCaret.left;
 					pt.y = guiInfo.rcCaret.bottom;
 					ClientToScreen(parentWndHandle, &pt);
 					debugPrint(L"current caret position from GetGUIThreadInfo, x = %d, y = %d", pt.x, pt.y);
-					if(_notifyLocation.x < 0) _notifyLocation.x = pt.x;
-					if(_notifyLocation.y < 0) _notifyLocation.y = pt.y;
+					// Only update when rcCaret is non-zero. When validCaretPos=FALSE,
+					// pt (after ClientToScreen) is the browser window's screen origin —
+					// not the caret — so we must not write it even for initialisation.
+					if (validCaretPos) {
+						if (refreshLocation || _notifyLocation.x < 0) _notifyLocation.x = pt.x;
+						if (refreshLocation || _notifyLocation.y < 0) _notifyLocation.y = pt.y;
+						caretUpdated = TRUE;
+					}
 				}
 				else if(parentWndHandle)
 				{
 					POINT caretPt;
 					GetCaretPos(&caretPt);
+					// Check raw client-coords before ClientToScreen for the same reason.
+					BOOL validCaretPosAlt = (caretPt.x != 0 || caretPt.y != 0);
 					ClientToScreen(parentWndHandle, &caretPt);
 					debugPrint(L"current caret position from GetCaretPos, x = %d, y = %d", caretPt.x, caretPt.y);
-					if (_notifyLocation.x < 0) _notifyLocation.x = caretPt.x;
-					if (_notifyLocation.y < 0) _notifyLocation.y = caretPt.y;
-
-				}
-				
-
-				ShowNotify(TRUE, delayShow, timeToHide);	
-
-				if(delayShow == 0)
-				{
-					if(_pCandidateWnd && _pNotifyWnd && _pCandidateWnd->_IsWindowVisible())
-					{
-						if( _notifyLocation.x  < (int) _pNotifyWnd->_GetWidth() )
-							_pNotifyWnd->_Move(_notifyLocation.x  + _pCandidateWnd->_GetWidth() + SHADOW_SPREAD / 2, _notifyLocation.y);
-						else		
-							_pNotifyWnd->_Move(_notifyLocation.x  - _pNotifyWnd->_GetWidth() - SHADOW_SPREAD / 2, _notifyLocation.y);
+					if (validCaretPosAlt) {
+						if (refreshLocation || _notifyLocation.x < 0) _notifyLocation.x = caretPt.x;
+						if (refreshLocation || _notifyLocation.y < 0) _notifyLocation.y = caretPt.y;
+						caretUpdated = TRUE;
 					}
-					else
-						_pNotifyWnd->_Move(_notifyLocation.x, _notifyLocation.y);
 				}
-				//means TextLayoutSink is not working. We need to ProbeComposition to start layout
-				if(_pTextService && delayShow == 0 && _GetContextDocument() == nullptr && notifyType == NOTIFY_TYPE::NOTIFY_CHN_ENG )
+				// Firefox fallback: when no valid caret was obtained from either path and
+				// _notifyLocation is uninitialised (reset on focus change by ResetCompRange),
+				// seed from the last known candidate position. Conditioned on _notifyLocation.x < 0
+				// only — not refreshLocation — so a freshly-set _notifyLocation from
+				// _LayoutChangeNotification during active composition is never overwritten by a
+				// stale _candLocation from a previous text field (e.g. Gmail compose box Y
+				// bleeding into the search bar).
+				debugPrint(L"ShowNotifyText pre-fallback: type=%d caretUpdated=%d notifyLoc=(%d,%d) candLoc=(%d,%d) rectComp=(%d,%d,%d,%d)",
+				           (int)notifyType, caretUpdated, _notifyLocation.x, _notifyLocation.y, _candLocation.x, _candLocation.y,
+				           _rectCompRange.left, _rectCompRange.top, _rectCompRange.right, _rectCompRange.bottom);
+				if (!caretUpdated && _notifyLocation.x < 0 && _candLocation.x >= 0)
+				{
+					_notifyLocation.x = _candLocation.x;
+					// If the candidate was flipped above the caret (candLocation.y < compRange.top),
+					// _notifyLocation.y is used directly as slot TOP in the no-candidate restack path,
+					// so place it below the composition text (not at candidate top or candidate bottom).
+					if (_rectCompRange.bottom > _rectCompRange.top && _candLocation.y < _rectCompRange.top)
+						_notifyLocation.y = _rectCompRange.bottom + SHADOW_SPREAD / 2;
+					else
+						_notifyLocation.y = _candLocation.y;
+				}
+				debugPrint(L"ShowNotifyText post-fallback: notifyLoc=(%d,%d)", _notifyLocation.x, _notifyLocation.y);
+
+
+				ShowNotify(TRUE, delayShow, timeToHide, notifyType);
+
+				auto& slot = _pNotifyWnds[idx];
+				if(delayShow == 0 && slot)
+				{
+					{
+					// Restack ALL visible slots from the same _notifyLocation anchor
+					// so every slot — new or pre-existing — shares the same X edge.
+					// Using _ComputeStackPosForNewSlot+_Move for only the new slot
+					// caused X misalignment when _notifyLocation changed between the
+					// first and second ShowNotifyText calls (e.g. probe fired in between).
+					BOOL growUp = _DecideStackGrowUp();
+					if (_pCandidateWnd && _pCandidateWnd->_IsWindowVisible())
+					{
+						// Set _notifyLocation.y above candidate top so _DecideStackGrowUp returns
+						// TRUE when the candidate is flipped. _RestackVisibleSlots then uses
+						// cr.bottom as the actual anchor (slots grow upward from candidate bottom).
+						if (_rectCompRange.top > 0 && _candLocation.y < _rectCompRange.top)
+						{
+							RECT _candWndRect = {};
+							_pCandidateWnd->_GetWindowRect(&_candWndRect);
+							_notifyLocation.y = _candLocation.y + (_candWndRect.bottom - _candWndRect.top);
+						}
+						else
+							_notifyLocation.y = _candLocation.y;
+					}
+					else if (!caretUpdated && _rectCompRange.bottom > _rectCompRange.top
+					         && _candLocation.y < _rectCompRange.top)
+					{
+						// Candidate was flipped above caret. Anchor = candidate window bottom,
+						// which _GetWindowExtent always places SHADOW_SPREAD/2 above comp top:
+						//   candBottom = _rectCompRange.top - SHADOW_SPREAD/2
+						// Using _rectCompRange.top directly lands the slot 7px too low.
+						// Also realign X to candidate left edge.
+						_notifyLocation.y = _rectCompRange.top - SHADOW_SPREAD / 2;
+						growUp = TRUE;
+						if (_candLocation.x >= 0)
+							_notifyLocation.x = _candLocation.x;
+					}
+					debugPrint(L"ShowNotifyText restack: notifyLoc=(%d,%d) candVisible=%d rectComp.top=%d candLoc.y=%d",
+					           _notifyLocation.x, _notifyLocation.y,
+					           (_pCandidateWnd && _pCandidateWnd->_IsWindowVisible()) ? 1 : 0,
+					           _rectCompRange.top, _candLocation.y);
+					_RestackVisibleSlots(growUp);
+				}
+				}
+				//means TextLayoutSink is not working. We need to ProbeComposition to start layout.
+				// Issue #127: also probe for compositional-hint slots and BEEP so they
+				// track the caret when ShowNotifyDesktop pref is OFF.
+				if(_pTextService && delayShow == 0 && _GetContextDocument() == nullptr
+				   && (notifyType == NOTIFY_TYPE::NOTIFY_CHN_ENG
+				       || notifyType == NOTIFY_TYPE::NOTIFY_REVERSE_LOOKUP
+				       || notifyType == NOTIFY_TYPE::NOTIFY_SPECIAL_CODE
+				       || notifyType == NOTIFY_TYPE::NOTIFY_BEEP) )
 					_pTextService->_ProbeComposition(pContext);
 
 			}
 
 		}
-		 
+
 
 	}
 
@@ -1586,10 +1804,11 @@ void CUIPresenter::ShowNotifyText(_In_ CStringRange* pNotifyText, _In_opt_ UINT 
 
 BOOL CUIPresenter::IsNotifyShown()
 {
-	if(_pNotifyWnd && _pNotifyWnd->_IsWindowVisible())
-		return TRUE;
-	else
-		return FALSE;
+	for (auto& w : _pNotifyWnds)
+	{
+		if (w && w->_IsWindowVisible()) return TRUE;
+	}
+	return FALSE;
 }
 BOOL CUIPresenter::IsCandShown()
 {
@@ -1644,11 +1863,27 @@ void CUIPresenter::DisposeCandidateWindow()
     }
 }
 
-void CUIPresenter::DisposeNotifyWindow()
+void CUIPresenter::DisposeNotifyWindow(_In_opt_ NOTIFY_TYPE notifyType)
 {
-    if (_pNotifyWnd)
+    if (notifyType == NOTIFY_TYPE::NOTIFY_COUNT)
     {
-        _pNotifyWnd->_Destroy();
-        _pNotifyWnd.reset(); // Automatically deletes the object
+        // Sentinel: dispose every slot.
+        for (auto& w : _pNotifyWnds)
+        {
+            if (w)
+            {
+                w->_Destroy();
+                w.reset();
+            }
+        }
+        return;
+    }
+    size_t idx = (size_t)notifyType;
+    if (idx >= _pNotifyWnds.size()) return;
+    auto& slot = _pNotifyWnds[idx];
+    if (slot)
+    {
+        slot->_Destroy();
+        slot.reset();
     }
 }

@@ -103,7 +103,8 @@ HRESULT CDIME::_AsyncReverseConversionNotification(_In_ TfEditCookie ec,_In_ ITf
 		hr = E_OUTOFMEMORY;
 		goto Exit;
 	}
-	if(SUCCEEDED(_pITfReverseConversion[(UINT)Global::imeMode]->DoReverseConversion(bstr, &reverseConversionList)) && reverseConversionList)
+	ITfReverseConversion* pRC = _pITfReverseConversion[(UINT)Global::imeMode];
+	if(pRC && SUCCEEDED(pRC->DoReverseConversion(bstr, &reverseConversionList)) && reverseConversionList)
 	{
 		UINT hasResult;
 		if(SUCCEEDED(reverseConversionList->GetLength(&hasResult)) && hasResult)
@@ -115,7 +116,7 @@ HRESULT CDIME::_AsyncReverseConversionNotification(_In_ TfEditCookie ec,_In_ ITf
 				if (pwch)
 				{
 					StringCchCopy(pwch, SysStringLen(bstrResult)+1, (WCHAR*) bstrResult);
-					_pUIPresenter->ShowNotifyText(&reverseConvNotify.Set(pwch, wcslen(pwch)), 0, 0, NOTIFY_TYPE::NOTIFY_OTHERS);
+					_pUIPresenter->ShowNotifyText(&reverseConvNotify.Set(pwch, wcslen(pwch)), 0, 0, NOTIFY_TYPE::NOTIFY_REVERSE_LOOKUP);
 				}
 			}
 		}
