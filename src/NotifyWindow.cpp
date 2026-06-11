@@ -232,7 +232,8 @@ void CNotifyWindow::_Show(BOOL isShowWnd, UINT delayShow, UINT timeToHide)
 				UINT dpi = CConfig::GetDpiForHwnd(_GetWnd());
 				int radius = MulDiv(_cornerRadiusBase, dpi, USER_DEFAULT_SCREEN_DPI);
 				HRGN hRgn = CreateRoundRectRgn(0, 0, cx + 1, cy + 1, radius, radius);
-				SetWindowRgn(_GetWnd(), hRgn, TRUE);
+				if (hRgn)
+					SetWindowRgn(_GetWnd(), hRgn, TRUE);
 			}
 		}
 	}
@@ -620,21 +621,22 @@ void CNotifyWindow::_AddString(_Inout_ const CStringRange *pNotifyText)
 	debugPrint(L"CNotifyWindow::_AddString()");
 	if(pNotifyText == nullptr ) return;
 	size_t notifyTextLen = pNotifyText->GetLength();
-    WCHAR* pwchString = nullptr;
     if (notifyTextLen)
     {
-		pwchString = new (std::nothrow) WCHAR[ _notifyText.GetLength() + notifyTextLen + 2];
+		size_t newLen = _notifyText.GetLength() + notifyTextLen;
+		std::unique_ptr<WCHAR[]> pwchString(new (std::nothrow) WCHAR[newLen + 2]);
         if (!pwchString)
         {
             return;
         }
-		StringCchCopyN(pwchString, _notifyText.GetLength() + notifyTextLen + 2, _notifyText.Get(),_notifyText.GetLength()); 
-		StringCchCatN(pwchString,_notifyText.GetLength() + notifyTextLen + 2, pNotifyText->Get(), notifyTextLen); 
-		_notifyText.Set(pwchString, _notifyText.GetLength() + notifyTextLen);
-		
+		pwchString[0] = L'\0';
+		StringCchCopyN(pwchString.get(), newLen + 2, _notifyText.Get(), _notifyText.GetLength());
+		StringCchCatN(pwchString.get(), newLen + 2, pNotifyText->Get(), notifyTextLen);
+		// Copy from the old buffer is done; hand ownership to the member,
+		// which frees the previous buffer (CStringRange::Set never frees).
+		_notifyTextBuf = std::move(pwchString);
+		_notifyText.Set(_notifyTextBuf.get(), newLen);
     }
-
-   
 }
 
 //+---------------------------------------------------------------------------
@@ -651,11 +653,17 @@ void CNotifyWindow::_SetString(_Inout_ const CStringRange *pNotifyText)
     size_t notifyTextLen = pNotifyText->GetLength();
     if (notifyTextLen)
     {
-        // Use std::unique_ptr for safe memory management
-        std::unique_ptr<WCHAR[]> pwchString = std::make_unique<WCHAR[]>(notifyTextLen + 1);
+        std::unique_ptr<WCHAR[]> pwchString(new (std::nothrow) WCHAR[notifyTextLen + 1]);
+        if (!pwchString)
+        {
+            return;
+        }
         StringCchCopyN(pwchString.get(), notifyTextLen + 1, pNotifyText->Get(), notifyTextLen);
 
-        _notifyText.Set(pwchString.release(), notifyTextLen); // Transfer ownership
+        // Hand ownership to the member, which frees the previous buffer
+        // (CStringRange::Set never frees — the old code leaked on every call).
+        _notifyTextBuf = std::move(pwchString);
+        _notifyText.Set(_notifyTextBuf.get(), notifyTextLen);
         debugPrint(L"CNotifyWindow::_SetString(), notifyTextLen =%d", notifyTextLen);
     }
 }
@@ -669,6 +677,7 @@ void CNotifyWindow::_SetString(_Inout_ const CStringRange *pNotifyText)
 void CNotifyWindow::_Clear()
 {
 	_notifyText.Set(nullptr,0);
+	_notifyTextBuf.reset();
 }
 
 UINT CNotifyWindow::_GetWidth()

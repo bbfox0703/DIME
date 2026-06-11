@@ -96,19 +96,136 @@ _T_GetDpiForMonitor CConfig::_GetDpiForMonitor = nullptr;
 _T_GetSystemMetricsForDpi CConfig::_GetSystemMetricsForDpi = nullptr;
 _T_SetThreadDpiAwarenessContext CConfig::_SetThreadDpiAwarenessContext = nullptr;
 
+typedef DPI_AWARENESS_CONTEXT (WINAPI* _T_GetWindowDpiAwarenessContext)(HWND);
+typedef BOOL (WINAPI* _T_AreDpiAwarenessContextsEqual)(DPI_AWARENESS_CONTEXT, DPI_AWARENESS_CONTEXT);
+typedef BOOL (WINAPI* _T_LogicalToPhysicalPointForPerMonitorDPI)(HWND, LPPOINT);
+
+BOOL CConfig::IsHwndDpiUnaware(HWND hWnd)
+{
+	if (!hWnd) return FALSE;
+	// Win10 1607+ APIs; load dynamically to avoid link-time dependency on newer user32.
+	static _T_GetWindowDpiAwarenessContext s_getWndDpiCtx = reinterpret_cast<_T_GetWindowDpiAwarenessContext>(
+		GetProcAddress(GetModuleHandle(L"user32.dll"), "GetWindowDpiAwarenessContext"));
+	static _T_AreDpiAwarenessContextsEqual s_areDpiCtxEqual = reinterpret_cast<_T_AreDpiAwarenessContextsEqual>(
+		GetProcAddress(GetModuleHandle(L"user32.dll"), "AreDpiAwarenessContextsEqual"));
+	if (s_getWndDpiCtx && s_areDpiCtxEqual)
+	{
+		DPI_AWARENESS_CONTEXT ctx = s_getWndDpiCtx(hWnd);
+		if (ctx && s_areDpiCtxEqual(ctx, DPI_AWARENESS_CONTEXT_UNAWARE))
+			return TRUE;
+	}
+	return FALSE;
+}
+
 UINT CConfig::GetDpiForHwnd(HWND hWnd)
 {
 	if (hWnd && _GetDpiForMonitor)
 	{
+		// GetDpiForMonitor(MDT_EFFECTIVE_DPI) is virtualized by the calling
+		// thread's DPI awareness: inside a system-DPI-aware host app it reports
+		// the system DPI for EVERY monitor, so fonts/windows on a secondary
+		// screen get sized for the primary. Our popup windows are Per-Monitor V2,
+		// so query under a temporary PMv2 context to get the monitor's real DPI.
+		// DPI-unaware hosts are the exception: our windows skip the PMv2 override
+		// there and live in the virtualized 96-DPI space, which is what the
+		// un-overridden query returns.
+		DPI_AWARENESS_CONTEXT prevCtx = nullptr;
+		if (_SetThreadDpiAwarenessContext && !IsHwndDpiUnaware(hWnd))
+			prevCtx = _SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+
 		HMONITOR monitor = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
-		UINT dpiX, dpiY;
-		if (SUCCEEDED(_GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &dpiX, &dpiY)) && dpiY > 0)
+		UINT dpiX = 0, dpiY = 0;
+		HRESULT hr = _GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &dpiX, &dpiY);
+
+		if (prevCtx && _SetThreadDpiAwarenessContext)
+			_SetThreadDpiAwarenessContext(prevCtx);
+
+		if (SUCCEEDED(hr) && dpiY > 0)
 			return dpiY;
 	}
 	HDC hDC = GetDC(nullptr);
 	UINT dpi = (UINT)GetDeviceCaps(hDC, LOGPIXELSY);
 	ReleaseDC(nullptr, hDC);
 	return dpi;
+}
+
+void CConfig::TextExtRectToPhysical(HWND appWndHandle, _Inout_ RECT* lpRect)
+{
+	if (!appWndHandle || !lpRect) return;
+
+	// This runs on the host app's UI thread under its own DPI context, so both
+	// lpRect (from ITfContextView::GetTextExt) and GetWindowRect below are in
+	// the host's (possibly virtualized) screen space — directly comparable.
+	RECT rcWnd = { 0, 0, 0, 0 };
+	if (GetWindowRect(appWndHandle, &rcWnd))
+	{
+		// Some CEF/Chromium-based hosts (e.g. LINE) report composition bounds in
+		// 96-DPI DIPs instead of screen pixels, which lands the rect far outside
+		// the host window on a scaled monitor. Rescale by the host-space DPI and
+		// adopt the result only if that brings the rect back inside the window.
+		const int margin = 32;
+		BOOL inside = lpRect->left   >= rcWnd.left   - margin
+		           && lpRect->right  <= rcWnd.right  + margin
+		           && lpRect->top    >= rcWnd.top    - margin
+		           && lpRect->bottom <= rcWnd.bottom + margin;
+		if (!inside)
+		{
+			HDC hDC = GetDC(nullptr);
+			int appDpi = GetDeviceCaps(hDC, LOGPIXELSY);
+			ReleaseDC(nullptr, hDC);
+			if (appDpi > USER_DEFAULT_SCREEN_DPI)
+			{
+				RECT scaled;
+				scaled.left   = MulDiv(lpRect->left,   appDpi, USER_DEFAULT_SCREEN_DPI);
+				scaled.top    = MulDiv(lpRect->top,    appDpi, USER_DEFAULT_SCREEN_DPI);
+				scaled.right  = MulDiv(lpRect->right,  appDpi, USER_DEFAULT_SCREEN_DPI);
+				scaled.bottom = MulDiv(lpRect->bottom, appDpi, USER_DEFAULT_SCREEN_DPI);
+				if (scaled.left   >= rcWnd.left   - margin
+				 && scaled.right  <= rcWnd.right  + margin
+				 && scaled.top    >= rcWnd.top    - margin
+				 && scaled.bottom <= rcWnd.bottom + margin)
+				{
+					debugPrint(L"CConfig::TextExtRectToPhysical() DIP rect detected, rescaled by %d/96", appDpi);
+					*lpRect = scaled;
+				}
+			}
+		}
+	}
+
+	// DPI-unaware host: our popup windows skip the PMv2 override and share the
+	// host's virtualized space — converting to physical would break that.
+	if (IsHwndDpiUnaware(appWndHandle)) return;
+
+	// Win8.1+; no-op for per-monitor-aware host windows, converts system-aware
+	// virtualized coordinates to the physical pixels our PMv2 windows position in.
+	static _T_LogicalToPhysicalPointForPerMonitorDPI s_logicalToPhysical =
+		reinterpret_cast<_T_LogicalToPhysicalPointForPerMonitorDPI>(
+			GetProcAddress(GetModuleHandle(L"user32.dll"), "LogicalToPhysicalPointForPerMonitorDPI"));
+	if (!s_logicalToPhysical) return;
+
+	POINT topLeft = { lpRect->left, lpRect->top };
+	POINT bottomRight = { lpRect->right, lpRect->bottom };
+	if (s_logicalToPhysical(appWndHandle, &topLeft) && s_logicalToPhysical(appWndHandle, &bottomRight))
+	{
+		lpRect->left   = topLeft.x;
+		lpRect->top    = topLeft.y;
+		lpRect->right  = bottomRight.x;
+		lpRect->bottom = bottomRight.y;
+	}
+}
+
+CDpiAwarenessScope::CDpiAwarenessScope(HWND appWndHandle) : _prevCtx(nullptr)
+{
+	auto setThreadDpiCtx = CConfig::GetSetThreadDpiAwarenessContext();
+	if (setThreadDpiCtx && !CConfig::IsHwndDpiUnaware(appWndHandle))
+		_prevCtx = setThreadDpiCtx(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+}
+
+CDpiAwarenessScope::~CDpiAwarenessScope()
+{
+	auto setThreadDpiCtx = CConfig::GetSetThreadDpiAwarenessContext();
+	if (_prevCtx && setThreadDpiCtx)
+		setThreadDpiCtx(_prevCtx);
 }
 
 PHONETIC_KEYBOARD_LAYOUT CConfig::_phoneticKeyboardLayout = PHONETIC_KEYBOARD_LAYOUT::PHONETIC_STANDARD_KEYBOARD_LAYOUT;
@@ -794,9 +911,11 @@ void CConfig::SetDefaultTextFont(HWND hWnd)
 	UINT dpiY = 0;
 	if (hWnd && _GetDpiForMonitor)
 	{
-		HMONITOR monitor = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
-		UINT dpiX;
-		_GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &dpiX, &dpiY);
+		// GetDpiForHwnd queries under a temporary PMv2 thread context, so the
+		// result is the monitor's REAL DPI even when the host app is
+		// system-DPI-aware (which would otherwise report the primary-screen
+		// system DPI for every monitor and size the font wrongly on secondaries).
+		dpiY = GetDpiForHwnd(hWnd);
 	}
 
 	if (Global::defaultlFontHandle != nullptr && (hWnd == nullptr || ( Global::isWindows8 && _dpiY != dpiY) ))

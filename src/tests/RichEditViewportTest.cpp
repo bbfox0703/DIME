@@ -1,4 +1,4 @@
-// RichEditViewportTest.cpp — Layer 3: in-process RichEdit GUI tests (IT_RE_*)
+﻿// RichEditViewportTest.cpp — Layer 3: in-process RichEdit GUI tests (IT_RE_*)
 //
 // Verifies EM_EXLIMITTEXT, TOM caret stability, ValidateViewport-style painting,
 // auto-jump, and EN_CHANGE-mute correctness. All tests host a bare RICHEDIT50W

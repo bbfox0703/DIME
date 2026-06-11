@@ -175,26 +175,8 @@ BOOL CBaseWindow::_Create(ATOM atom, DWORD dwExStyle, DWORD dwStyle, _In_opt_ CB
         auto _setThreadDpiCtx = CConfig::GetSetThreadDpiAwarenessContext();
         if (_setThreadDpiCtx)
         {
-            BOOL skipOverride = FALSE;
             HWND hParent = _pParentWnd ? _pParentWnd->_GetWnd() : parentWndHandle;
-            if (hParent)
-            {
-                // These APIs are available on the same Win10 1607+ as SetThreadDpiAwarenessContext,
-                // but load dynamically to avoid link-time dependency on newer user32.
-                typedef DPI_AWARENESS_CONTEXT (WINAPI *_T_GetWindowDpiAwarenessContext)(HWND);
-                typedef BOOL (WINAPI *_T_AreDpiAwarenessContextsEqual)(DPI_AWARENESS_CONTEXT, DPI_AWARENESS_CONTEXT);
-                static _T_GetWindowDpiAwarenessContext s_getWndDpiCtx = reinterpret_cast<_T_GetWindowDpiAwarenessContext>(
-                    GetProcAddress(GetModuleHandle(L"user32.dll"), "GetWindowDpiAwarenessContext"));
-                static _T_AreDpiAwarenessContextsEqual s_areDpiCtxEqual = reinterpret_cast<_T_AreDpiAwarenessContextsEqual>(
-                    GetProcAddress(GetModuleHandle(L"user32.dll"), "AreDpiAwarenessContextsEqual"));
-                if (s_getWndDpiCtx && s_areDpiCtxEqual)
-                {
-                    DPI_AWARENESS_CONTEXT parentCtx = s_getWndDpiCtx(hParent);
-                    if (parentCtx && s_areDpiCtxEqual(parentCtx, DPI_AWARENESS_CONTEXT_UNAWARE))
-                        skipOverride = TRUE;
-                }
-            }
-            if (!skipOverride)
+            if (!CConfig::IsHwndDpiUnaware(hParent))
                 _prevDpiCtx = _setThreadDpiCtx(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         }
 
@@ -281,7 +263,8 @@ void CBaseWindow::_Resize(int x, int y, int cx, int cy)
             UINT dpi = CConfig::GetDpiForHwnd(_wndHandle);
             int radius = MulDiv(_cornerRadiusBase, dpi, USER_DEFAULT_SCREEN_DPI);
             HRGN hRgn = CreateRoundRectRgn(0, 0, cx + 1, cy + 1, radius, radius);
-            SetWindowRgn(_wndHandle, hRgn, TRUE);
+            if (hRgn)
+                SetWindowRgn(_wndHandle, hRgn, TRUE);
         }
     }
     else

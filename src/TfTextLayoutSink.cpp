@@ -36,6 +36,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "TfTextLayoutSink.h"
 #include "DIME.h"
 #include "GetTextExtentEditSession.h"
+#include "Config.h"
 
 CTfTextLayoutSink::CTfTextLayoutSink(_In_ CDIME *pTextService)
 {
@@ -279,6 +280,14 @@ HRESULT CTfTextLayoutSink::_GetTextExt(_Inout_ RECT *lpRect)
         return hr;
     }
 	debugPrint (L"CTfTextLayoutSink::_GetTextExt(); top=%d, bottom=%d, left =%d, righ=%d",lpRect->top, lpRect->bottom, lpRect->left, lpRect->right);
+    // GetTextExt reports coordinates in the host app's DPI space. Map to the
+    // physical pixels our Per-Monitor V2 windows position in (no-op for
+    // per-monitor-aware hosts) before the rect reaches the positioning code.
+    {
+        HWND appWndHandle = nullptr;
+        if (SUCCEEDED(pContextView->GetWnd(&appWndHandle)) && appWndHandle)
+            CConfig::TextExtRectToPhysical(appWndHandle, lpRect);
+    }
     pContextView->Release();
 
     return S_OK;

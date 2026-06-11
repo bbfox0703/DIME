@@ -609,14 +609,24 @@ HRESULT CDIME::_ProbeCompositionRangeNotification(_In_ TfEditCookie ec, _In_ ITf
 			hr, rcExt.top, rcExt.bottom, rcExt.left, rcExt.right);
 		if (SUCCEEDED(hr) && _pUIPresenter && (rcExt.bottom - rcExt.top > 0))  // require non-zero height; LINE returns zero-height junk rects on initial focus
 		{
+			HWND hwndParent = nullptr;
+			pContextView->GetWnd(&hwndParent);
+			if (!hwndParent) hwndParent = GetForegroundWindow();
+
+			// GetTextExt reports coordinates in the host app's DPI space. Map to
+			// physical pixels (same as the candidate-window path) BEFORE padding,
+			// so the height math below is in the same space.
+			if (hwndParent)
+				CConfig::TextExtRectToPhysical(hwndParent, &rcExt);
+
 			// Pad rect height — Chromium selection ranges return ~2px height instead of full text line.
 			// Use last known composition height if available, otherwise use a DPI-scaled default minimum.
 			LONG rectHeight = rcExt.bottom - rcExt.top;
 			LONG compHeight = _pUIPresenter->GetCompRangeHeight();
 			if (compHeight > 0 && rectHeight < compHeight)
 				rcExt.bottom = rcExt.top + compHeight;
-			else if (rectHeight < (LONG)MulDiv(16, CConfig::GetDpiForHwnd(NULL), 96))
-				rcExt.bottom = rcExt.top + MulDiv(16, CConfig::GetDpiForHwnd(NULL), 96);
+			else if (rectHeight < (LONG)MulDiv(16, CConfig::GetDpiForHwnd(hwndParent), 96))
+				rcExt.bottom = rcExt.top + MulDiv(16, CConfig::GetDpiForHwnd(hwndParent), 96);
 			debugPrint(L"CDIME::_ProbeCompositionRangeNotification() padded bottom=%d", rcExt.bottom);
 
 			// Sanity check: if the system caret is in a different window from the
@@ -624,9 +634,6 @@ HRESULT CDIME::_ProbeCompositionRangeNotification(_In_ TfEditCookie ec, _In_ ITf
 			// (e.g. Excel formula bar instead of cell, CMD console host).
 			// Skip the probe so the notify keeps its position from GetGUIThreadInfo.
 			BOOL rectIsReliable = TRUE;
-			HWND hwndParent = nullptr;
-			pContextView->GetWnd(&hwndParent);
-			if (!hwndParent) hwndParent = GetForegroundWindow();
 			{
 				GUITHREADINFO gti = { sizeof(GUITHREADINFO) };
 				if (GetGUIThreadInfo(0, &gti))
@@ -641,20 +648,69 @@ HRESULT CDIME::_ProbeCompositionRangeNotification(_In_ TfEditCookie ec, _In_ ITf
 				}
 			}
 
-			if (rectIsReliable)
+			// Chromium/CEF hosts (e.g. LINE) have no system caret and answer a
+			// selection-range GetTextExt with a view-origin rect — or one outside
+			// the window entirely — when no composition is active. Such rects are
+			// junk regardless of coordinate space: reject them so the notify keeps
+			// the position seeded from the last composition/candidate location.
+			// Rejecting a LEGIT rect that hugs the client's left edge is harmless:
+			// apps whose caret can sit there expose a system caret, so the
+			// GetGUIThreadInfo position already placed the notify correctly.
+			RECT rcWnd = { 0, 0, 0, 0 };
+			POINT ptClientOrigin = { 0, 0 };
+			if (hwndParent)
 			{
-				ITfDocumentMgr* pDocumgr = nullptr;
-				if (SUCCEEDED(pContext->GetDocumentMgr(&pDocumgr)) && pDocumgr && _pThreadMgr)
+				// Physical pixels, to match the converted rcExt.
+				CDpiAwarenessScope dpiScope(hwndParent);
+				GetWindowRect(hwndParent, &rcWnd);
+				ClientToScreen(hwndParent, &ptClientOrigin);
+			}
+			if (rectIsReliable && hwndParent)
+			{
+				BOOL outsideWnd = rcExt.left < rcWnd.left || rcExt.left > rcWnd.right
+				               || rcExt.top  < rcWnd.top  || rcExt.top  > rcWnd.bottom;
+				BOOL hugsClientLeft = rcExt.left >= ptClientOrigin.x - 4 && rcExt.left <= ptClientOrigin.x + 8;
+				if (outsideWnd || hugsClientLeft)
 				{
-					ITfDocumentMgr* pFocusDocuMgr = nullptr;
-					_pThreadMgr->GetFocus(&pFocusDocuMgr);
-					if (pFocusDocuMgr == pDocumgr)
-						_pUIPresenter->_LayoutChangeNotification(&rcExt);
-					else
-						_pUIPresenter->ClearNotify();
-					pDocumgr->Release();
+					debugPrint(L"CDIME::_ProbeCompositionRangeNotification() junk rect (outsideWnd=%d hugsClientLeft=%d), treating as unreliable",
+						outsideWnd, hugsClientLeft);
+					rectIsReliable = FALSE;
 				}
 			}
+
+			ITfDocumentMgr* pDocumgr = nullptr;
+			BOOL focusMatches = FALSE;
+			if (SUCCEEDED(pContext->GetDocumentMgr(&pDocumgr)) && pDocumgr && _pThreadMgr)
+			{
+				ITfDocumentMgr* pFocusDocuMgr = nullptr;
+				_pThreadMgr->GetFocus(&pFocusDocuMgr);
+				focusMatches = (pFocusDocuMgr == pDocumgr);
+				if (pFocusDocuMgr)
+					pFocusDocuMgr->Release();
+				pDocumgr->Release();
+			}
+
+			if (!focusMatches)
+				_pUIPresenter->ClearNotify();
+			else if (rectIsReliable)
+				_pUIPresenter->_LayoutChangeNotification(&rcExt);
+			else if (!_pUIPresenter->HasValidNotifyLocation() && hwndParent)
+			{
+				// Last resort: rect is junk AND there is no previous good anchor
+				// (nothing typed yet in this focus session). Clamp the rect into
+				// the host window so the notify is at least visible inside it
+				// instead of stranded off-screen.
+				LONG w = rcExt.right - rcExt.left;
+				LONG h = rcExt.bottom - rcExt.top;
+				rcExt.left   = max(rcWnd.left, min(rcExt.left, rcWnd.right - w));
+				rcExt.top    = max(rcWnd.top,  min(rcExt.top,  rcWnd.bottom - h));
+				rcExt.right  = rcExt.left + w;
+				rcExt.bottom = rcExt.top + h;
+				debugPrint(L"CDIME::_ProbeCompositionRangeNotification() no prior anchor, using clamped rect (%d,%d)", rcExt.left, rcExt.top);
+				_pUIPresenter->_LayoutChangeNotification(&rcExt);
+			}
+			// else: keep the position already seeded by ShowNotifyText
+			// (GetGUIThreadInfo caret or last candidate/composition location).
 		}
 		pContextView->Release();
 	}

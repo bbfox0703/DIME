@@ -113,7 +113,8 @@ private:
 	int _x;
 	int _y;
 
-	CStringRange _notifyText;
+	CStringRange _notifyText;                    // non-owning view into _notifyTextBuf
+	std::unique_ptr<WCHAR[]> _notifyTextBuf;     // owns the text; CStringRange::Set never frees
 
 	NOTIFY_TYPE _notifyType;
 
