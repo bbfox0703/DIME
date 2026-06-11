@@ -340,7 +340,8 @@ void CCandidateWindow::_Show(BOOL isShowWnd)
             UINT dpi = CConfig::GetDpiForHwnd(_GetWnd());
             int radius = MulDiv(_cornerRadiusBase, dpi, USER_DEFAULT_SCREEN_DPI);
             HRGN hRgn = CreateRoundRectRgn(0, 0, cx + 1, cy + 1, radius, radius);
-            SetWindowRgn(_GetWnd(), hRgn, TRUE);
+            if (hRgn)
+                SetWindowRgn(_GetWnd(), hRgn, TRUE);
         }
         debugPrint(L"  _Show: after SetWindowRgn, visible=%d, rect=(%d,%d,%d,%d) cx=%d cy=%d",
             IsWindowVisible(_GetWnd()), rc.left, rc.top, rc.right, rc.bottom, cx, cy);

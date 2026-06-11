@@ -160,6 +160,9 @@ public:
 	void ShowNotifyText(_In_ CStringRange *pNotifyText, _In_opt_ UINT delayShow = 0, _In_opt_ UINT timeToHide = 0, _In_opt_ NOTIFY_TYPE notifyType  = NOTIFY_TYPE::NOTIFY_CHN_ENG);
 	BOOL IsNotifyShown();
 	LONG GetCompRangeHeight() const { return _rectCompRange.bottom - _rectCompRange.top; }
+	// TRUE when the notify stack already has a usable on-screen anchor (seeded
+	// from GetGUIThreadInfo or the last composition/candidate position).
+	BOOL HasValidNotifyLocation() const { return _notifyLocation.x >= 0 && _notifyLocation.y >= 0; }
 	void ResetCompRange();
 
 	BOOL isUILessMode() const {return !_isShowMode;}

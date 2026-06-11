@@ -37,6 +37,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "GetTextExtentEditSession.h"
 #include "TfTextLayoutSink.h"
 #include "DIME.h"
+#include "Config.h"
 
 //+---------------------------------------------------------------------------
 //
@@ -68,9 +69,16 @@ STDAPI CGetTextExtentEditSession::DoEditSession(TfEditCookie ec)
 
     if (SUCCEEDED(_pContextView->GetTextExt(ec, _pRangeComposition, &rc, &isClipped)))
     {
+        // GetTextExt reports coordinates in the host app's DPI space. Map to the
+        // physical pixels our Per-Monitor V2 windows position in (no-op for
+        // per-monitor-aware hosts) before the rect reaches the positioning code.
+        HWND appWndHandle = nullptr;
+        if (SUCCEEDED(_pContextView->GetWnd(&appWndHandle)) && appWndHandle)
+            CConfig::TextExtRectToPhysical(appWndHandle, &rc);
+
 		if(_pTfTextLayoutSink)
 			_pTfTextLayoutSink->_LayoutChangeNotification(&rc);
-        
+
     }
 
     return S_OK;

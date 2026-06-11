@@ -1,4 +1,4 @@
-// TSFCoreLogicIntegrationTest.cpp - IT-05: TSF Core Logic Tests
+﻿// TSFCoreLogicIntegrationTest.cpp - IT-05: TSF Core Logic Tests
 // Tests core IME logic: key processing, composition, candidate selection, mode switching
 // Target Coverage: Core logic paths in KeyEventSink.cpp, Composition.cpp, CandidateHandler.cpp
 // Target Functions: OnTestKeyDown(), OnKeyDown(), composition management, candidate handling

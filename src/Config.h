@@ -296,6 +296,8 @@ public:
 	static int GetSystemMetricsDpi(int nIndex, UINT dpi) { return _GetSystemMetricsForDpi ? _GetSystemMetricsForDpi(nIndex, dpi) : GetSystemMetrics(nIndex); }
 	static _T_SetThreadDpiAwarenessContext GetSetThreadDpiAwarenessContext() { return _SetThreadDpiAwarenessContext; }
 	static UINT GetDpiForHwnd(HWND hWnd);  // returns effective DPI for a window's monitor, or system DPI as fallback
+	static BOOL IsHwndDpiUnaware(HWND hWnd);  // TRUE when the window belongs to a DPI-unaware (fully virtualized) host
+	static void TextExtRectToPhysical(HWND appWndHandle, _Inout_ RECT* lpRect);  // map a GetTextExt rect from host-app DPI space to physical pixels
 	static BOOL GetAlwaysShowScrollbars();  // reads Win11 "Always show scrollbars" accessibility setting
 
 private:
@@ -394,5 +396,21 @@ private:
 	static BOOL exportCustomTableFile(_In_ HWND hDlg, IME_MODE imeMode, _In_ LPCWSTR pathToWrite);
 };
 
+// RAII: switch the thread to Per-Monitor V2 DPI awareness while computing IME
+// window positions, so monitor work areas, ClientToScreen and SetWindowPos all
+// operate in physical pixels — the space our Per-Monitor V2 popup windows live
+// in. The TIP runs on the host app's UI thread, whose DPI context otherwise
+// virtualizes those APIs (a system-DPI-aware host reports every monitor at the
+// system DPI, landing the candidate window on the wrong monitor). Skipped when
+// the host app is DPI-unaware — our windows then skip the PMv2 override too and
+// share the host's virtualized space — or before Windows 10 1607.
+class CDpiAwarenessScope
+{
+public:
+	explicit CDpiAwarenessScope(HWND appWndHandle);
+	~CDpiAwarenessScope();
+private:
+	DPI_AWARENESS_CONTEXT _prevCtx;
+};
 
 #endif

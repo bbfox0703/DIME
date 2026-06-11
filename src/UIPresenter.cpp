@@ -920,19 +920,26 @@ VOID CUIPresenter::_LayoutChangeNotification(_In_ RECT *lpRect, BOOL firstCall)
 
 	ITfContext *pContext =  _GetContextDocument();
 	ITfContextView * pView = nullptr;
-	HWND parentWndHandle;
+	HWND parentWndHandle = nullptr;
 	POINT caretPt = { 0, 0 };
-	
-	if (pContext && SUCCEEDED(pContext->GetActiveView(&pView)))
+
+	if (pContext && SUCCEEDED(pContext->GetActiveView(&pView)) && pView)
 	{
 		debugPrint(L"parentWndHandle got from pContext");
 		pView->GetWnd(&parentWndHandle);
+		pView->Release();
 	}
 	else
 	{
 		parentWndHandle = GetForegroundWindow();
 	}
-		
+
+	// All position math below must run in physical pixels — our popup windows
+	// are Per-Monitor V2, while this thread (the host app's UI thread) may
+	// virtualize ClientToScreen and monitor work areas, landing the candidate
+	// window on the wrong monitor in multi-DPI setups.
+	CDpiAwarenessScope dpiScope(parentWndHandle);
+
 	if (parentWndHandle)
 	{
 		GetCaretPos(&caretPt);
@@ -1119,8 +1126,9 @@ HRESULT CUIPresenter::_NotifyChangeNotification(_In_ enum NOTIFY_WND action, _In
 						{
 							ShowNotify(TRUE, 0, (UINT) wParam, nt);
 							_pTextService->_ProbeComposition(pContext);
+							pContext->Release();
 						}
-
+						pDocumentMgr->Release();
 					}
 				}
 			}
@@ -1459,7 +1467,15 @@ HRESULT CUIPresenter::MakeNotifyWindow(_In_ ITfContext *pContextDocument, _In_ C
     if (pContextDocument && SUCCEEDED(pContextDocument->GetActiveView(&pView)) && pView)
     {
         pView->GetWnd(&parentWndHandle);
+        pView->Release();
     }
+
+	// Rebuild the shared font for the host monitor's real DPI BEFORE creating
+	// the window: WM_CREATE measures the notify text to size the window, and a
+	// font left over from a different-DPI monitor bakes in a mismatched size
+	// (text clipped to the top-left corner, or an oversized window).
+	if (Global::isWindows8 && parentWndHandle)
+		CConfig::SetDefaultTextFont(parentWndHandle);
 
 	if (slot->_GetUIWnd() == nullptr)
 	{
@@ -1622,6 +1638,7 @@ void CUIPresenter::ShowNotifyText(_In_ CStringRange* pNotifyText, _In_opt_ UINT 
 	// Replace-in-place for the SAME slot; leave OTHER slots untouched (was: ClearNotify all).
 	DisposeNotifyWindow(notifyType);
 
+	BOOL needReleaseContext = FALSE;
 	if(pContext == nullptr && _pTextService)
 	{
 		pThreadMgr = _pTextService->_GetThreadMgr();
@@ -1630,6 +1647,8 @@ void CUIPresenter::ShowNotifyText(_In_ CStringRange* pNotifyText, _In_opt_ UINT 
 			if (SUCCEEDED(pThreadMgr->GetFocus(&pDocumentMgr)) && pDocumentMgr)
 			{
 				pDocumentMgr->GetTop(&pContext);
+				needReleaseContext = (pContext != nullptr);
+				pDocumentMgr->Release();
 			}
 		}
 	}
@@ -1652,9 +1671,19 @@ void CUIPresenter::ShowNotifyText(_In_ CStringRange* pNotifyText, _In_opt_ UINT 
 			if (SUCCEEDED(pContext->GetActiveView(&pView)) && pView)
 			{
 				pView->GetWnd(&parentWndHandle);
+				pView->Release();
 				debugPrint(L" parentWndHandle = %x , FocusHwnd = %x, ActiveHwnd =%x, ForeGroundHWnd = %x", parentWndHandle, GetFocus(), GetActiveWindow(), GetForegroundWindow());
 				// Ensure font matches current monitor's DPI before sizing/showing notify window
 				if (Global::isWindows8 && parentWndHandle) CConfig::SetDefaultTextFont(parentWndHandle);
+
+				{
+				// Caret queries and stack positioning below must run in physical
+				// pixels to match our Per-Monitor V2 popup windows; the host app's
+				// thread context may otherwise virtualize them. The scope closes
+				// before _ProbeComposition so GetTextExt still runs under the
+				// host's own context (TextExtRectToPhysical converts its result
+				// at the source).
+				CDpiAwarenessScope dpiScope(parentWndHandle);
 
 				// Use stack allocation instead of heap allocation to avoid memory leaks
 				GUITHREADINFO guiInfo = {0};
@@ -1782,6 +1811,7 @@ void CUIPresenter::ShowNotifyText(_In_ CStringRange* pNotifyText, _In_opt_ UINT 
 					_RestackVisibleSlots(growUp);
 				}
 				}
+				}  // end CDpiAwarenessScope
 				//means TextLayoutSink is not working. We need to ProbeComposition to start layout.
 				// Issue #127: also probe for compositional-hint slots and BEEP so they
 				// track the caret when ShowNotifyDesktop pref is OFF.
@@ -1796,7 +1826,8 @@ void CUIPresenter::ShowNotifyText(_In_ CStringRange* pNotifyText, _In_opt_ UINT 
 
 		}
 
-
+		if (needReleaseContext)
+			pContext->Release();
 	}
 
 
@@ -1842,7 +1873,13 @@ HRESULT CUIPresenter::MakeCandidateWindow(_In_ ITfContext *pContextDocument, _In
     if (pContextDocument && SUCCEEDED(pContextDocument->GetActiveView(&pView)) && pView)
     {
         pView->GetWnd(&parentWndHandle);
+        pView->Release();
     }
+
+    // Rebuild the shared font for the host monitor's real DPI before the window
+    // measures its text metrics in WM_CREATE (see MakeNotifyWindow).
+    if (Global::isWindows8 && parentWndHandle)
+        CConfig::SetDefaultTextFont(parentWndHandle);
 
 	if (_pCandidateWnd && !_pCandidateWnd->_Create(wndWidth, CConfig::GetFontSize(), parentWndHandle))
     {
